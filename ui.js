@@ -1,0 +1,5662 @@
+// DEBUG: Log all clicks on the page to help diagnose event issues
+document.body.addEventListener('click', function(e) {
+  console.log('[DEBUG] BODY CLICK', e.target);
+});
+// ============================================================================
+// Auto-Play (Engine vs Engine)
+// ============================================================================
+document.body.addEventListener('click', function(e) {
+    console.log('[DEBUG] BODY CLICK', e.target);
+});
+
+let autoPlayActive = false;
+let autoPlayTimer = null;
+
+// Track last move arrow timestamp
+let lastMoveArrowTimestamp = 0;
+
+function autoPlayStep() {
+	if (!autoPlayActive || state.gameOver) {
+		autoPlayActive = false;
+		updateAutoPlayButton();
+		return;
+	}
+	state.aiEnabled = true;
+	state.aiColor = state.turn;
+	state.menuActive = false;
+	setBoardInput(false);
+	const { thinkTimeMs } = getDifficultySettings(state.aiLevel);
+	state.thinking = true;
+	setTimeout(() => {
+		const mv = aiChooseMove();
+		if (mv) {
+			makeMove(mv);
+			syncTrainingNotes?.();
+		}
+		state.thinking = false;
+		render();
+		updateHud();
+		if (autoPlayActive && !state.gameOver) {
+			autoPlayTimer = setTimeout(autoPlayStep, 200); // Short delay between moves
+		} else {
+			autoPlayActive = false;
+			updateAutoPlayButton();
+		}
+	}, thinkTimeMs);
+}
+
+function toggleAutoPlay() {
+	autoPlayActive = !autoPlayActive;
+	updateAutoPlayButton();
+	if (autoPlayActive) {
+		autoPlayStep();
+	} else {
+		if (autoPlayTimer) clearTimeout(autoPlayTimer);
+		autoPlayTimer = null;
+	}
+}
+
+function updateAutoPlayButton() {
+	const btn = document.getElementById('btn-autoplay');
+	if (btn) {
+		btn.textContent = autoPlayActive ? 'Stop Auto-Play' : 'Auto-Play';
+		btn.style.background = autoPlayActive ? 'linear-gradient(135deg, #ffd166, #ff6e6e)' : '';
+	}
+}
+
+// Add Auto-Play button to controls
+function addAutoPlayButton() {
+	const controlsPanel = document.getElementById('controls');
+	if (!controlsPanel) return;
+	if (document.getElementById('btn-autoplay')) return;
+	const btn = document.createElement('button');
+	btn.id = 'btn-autoplay';
+	btn.textContent = 'Auto-Play';
+	btn.style.marginLeft = '8px';
+	btn.style.padding = '6px 14px';
+	btn.style.fontSize = '13px';
+	btn.style.borderRadius = '6px';
+	btn.style.cursor = 'pointer';
+	btn.addEventListener('click', toggleAutoPlay);
+	controlsPanel.appendChild(btn);
+}
+
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', addAutoPlayButton);
+} else {
+	addAutoPlayButton();
+}
+
+// Stop auto-play on manual move or reset
+const _originalMakeMove = typeof makeMove === 'function' ? makeMove : null;
+if (_originalMakeMove) {
+	window.makeMove = function(mv) {
+		// Only set lastMoveArrowTimestamp if this is an AI move
+		if (state.aiEnabled && state.aiColor === state.turn) {
+			lastMoveArrowTimestamp = Date.now();
+		}
+		const result = _originalMakeMove(mv);
+		// If auto-play is active and game is not over, continue auto-play
+		if (autoPlayActive && !state.gameOver) {
+			if (autoPlayTimer) clearTimeout(autoPlayTimer);
+			autoPlayTimer = setTimeout(autoPlayStep, 200);
+		}
+		return result;
+	};
+}
+const _originalResetBoard = typeof resetBoard === 'function' ? resetBoard : null;
+if (_originalResetBoard) {
+	window.resetBoard = function() {
+		if (autoPlayActive) {
+			autoPlayActive = false;
+			updateAutoPlayButton();
+			if (autoPlayTimer) clearTimeout(autoPlayTimer);
+			autoPlayTimer = null;
+		}
+		return _originalResetBoard();
+	};
+}
+// ============================================================================
+// UI: Engine Info Panel
+// ============================================================================
+
+function createEngineInfoPanel() {
+	let panel = document.getElementById('engine-info-panel');
+	if (panel) return panel;
+	panel = document.createElement('div');
+	panel.id = 'engine-info-panel';
+	panel.className = 'panel';
+	panel.style.cssText = 'margin-top: 8px; padding: 8px 12px; background: #181b22; color: var(--muted); font-size: 13px; border-radius: 8px; min-width: 180px;';
+	panel.innerHTML = `
+		<div style="font-weight: 600; color: var(--accent); margin-bottom: 4px;">Engine Info</div>
+		<div id="engine-info-depth">Depth: --</div>
+		<div id="engine-info-nodes">Nodes: --</div>
+		<div id="engine-info-eval">Eval: --</div>
+	`;
+	// Place below controls or at top right
+	const controls = document.getElementById('controls');
+	if (controls && controls.parentNode) {
+		controls.parentNode.insertBefore(panel, controls.nextSibling);
+	} else {
+		document.body.appendChild(panel);
+	}
+	return panel;
+}
+
+function updateEngineInfo({ depth, nodes, evalScore }) {
+	const d = document.getElementById('engine-info-depth');
+	const n = document.getElementById('engine-info-nodes');
+	const e = document.getElementById('engine-info-eval');
+	if (d) d.textContent = `Depth: ${depth ?? '--'}`;
+	if (n) n.textContent = `Nodes: ${nodes ?? '--'}`;
+	if (e) e.textContent = `Eval: ${evalScore !== undefined ? formatScore(evalScore) : '--'}`;
+}
+
+function clearEngineInfo() {
+	updateEngineInfo({ depth: '--', nodes: '--', evalScore: undefined });
+}
+
+// Patch searchBestMove and aiChooseMove to update info
+let engineInfo = { depth: 0, nodes: 0, evalScore: 0 };
+
+// Wrap searchBestMove to count nodes and update info
+if (typeof searchBestMove === 'function') {
+	const _originalSearchBestMove = searchBestMove;
+	window.searchBestMove = function(ctx, depth, alpha, beta, color, rootColor, deadline, ply) {
+		engineInfo.nodes = 0;
+		let result = _originalSearchBestMove(ctx, depth, alpha, beta, color, rootColor, deadline, ply);
+		if (result && typeof result.score === 'number') engineInfo.evalScore = result.score;
+		engineInfo.depth = depth;
+		updateEngineInfo(engineInfo);
+		return result;
+	};
+}
+
+// Patch aiChooseMove to clear and update info
+if (typeof aiChooseMove === 'function') {
+	const _originalAiChooseMove = aiChooseMove;
+	aiChooseMove = function() {
+		clearEngineInfo();
+		let move = null;
+		let bestEval = 0;
+		let maxDepth = 0;
+		let nodes = 0;
+		// Use Multi-PV if enabled
+		if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
+			const ctx = cloneCtx(state.board, state.castling, state.enPassant);
+			maxDepth = getDifficultySettings(state.aiLevel).searchDepth;
+			const deadline = Date.now() + Math.max(80, getDifficultySettings(state.aiLevel).thinkTimeMs * 1.3);
+			let pvResults = searchMultiPV(
+				ctx,
+				maxDepth,
+				state.aiColor,
+				state.aiColor,
+				deadline,
+				multiPVConfig.lines
+			);
+			if (pvResults && pvResults.length) {
+				move = pvResults[0].move;
+				bestEval = pvResults[0].score;
+				maxDepth = pvResults[0].depth || maxDepth;
+				nodes = pvResults.reduce((sum, pv) => sum + (pv.nodes || 0), 0);
+			}
+		} else {
+			// Single-PV
+			const ctx = cloneCtx(state.board, state.castling, state.enPassant);
+			maxDepth = getDifficultySettings(state.aiLevel).searchDepth;
+			const deadline = Date.now() + Math.max(80, getDifficultySettings(state.aiLevel).thinkTimeMs * 1.3);
+			let best = { move: null, score: 0 };
+			let prevScore = 0;
+			let totalNodes = 0;
+			for (let d = 1; d <= maxDepth; d++) {
+				let window = 40;
+				let alpha = -Infinity;
+				let beta = Infinity;
+				let failCount = 0;
+				if (d > 1 && Number.isFinite(prevScore)) {
+					alpha = prevScore - window;
+					beta = prevScore + window;
+				}
+				let res;
+				let nodesBefore = engineInfo.nodes;
+				res = window.searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
+				let nodesAfter = engineInfo.nodes;
+				totalNodes += (nodesAfter - nodesBefore) || 0;
+				if (res && res.move) {
+					best = res;
+					prevScore = res.score;
+					bestEval = res.score;
+					move = res.move;
+					maxDepth = d;
+				}
+				updateEngineInfo({ depth: d, nodes: totalNodes, evalScore: bestEval });
+				if (Date.now() > deadline || res.cut) break;
+			}
+			nodes = totalNodes;
+		}
+		updateEngineInfo({ depth: maxDepth, nodes, evalScore: bestEval });
+		// Fallback to original if needed
+		if (!move && typeof _originalAiChooseMove === 'function') {
+			move = _originalAiChooseMove();
+		}
+		setTimeout(() => clearEngineInfo(), 800); // Clear after move for clarity
+		return move;
+	};
+}
+
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', createEngineInfoPanel);
+} else {
+	createEngineInfoPanel();
+}
+const container = document.getElementById("game-container");
+const boardLayer = document.getElementById("board-layer");
+const piecesLayer = document.getElementById("pieces-layer");
+const uiLayer = document.getElementById("ui-layer");
+const trainingNotesEl = document.getElementById("trainingNotes");
+
+const startOverlay = document.getElementById("start-overlay");
+const btn1p = document.getElementById("btn-1p");
+const btn2p = document.getElementById("btn-2p");
+const diffSelect = document.getElementById("difficulty-select");
+const btnStartOverlay = document.getElementById("btn-start-overlay");
+const btnRules = document.getElementById("btn-rules");
+const rulesOverlay = document.getElementById("rules-overlay");
+const closeRules = document.getElementById("close-rules");
+const hudBtnStart = document.getElementById("btn-start");
+const hudBtnReset = document.getElementById("btn-reset");
+const btnHint = document.getElementById("btn-hint");
+const btnHint2 = document.getElementById("btn-hint-2");
+const hudBtnHistory = document.getElementById("btn-history");
+const btnHistoryClose = document.getElementById("btn-history-close");
+const historyPanel = document.getElementById("history");
+const turnText = document.getElementById("turn-text");
+const aiText = document.getElementById("ai-text");
+const msgText = document.getElementById("msg-text");
+const capText = document.getElementById("cap-text");
+const lastMoveText = document.getElementById("lastmove-text");
+const moveList = document.getElementById("move-list");
+const difficultyMobile = document.getElementById("difficulty-mobile");
+
+
+// ============================================================================
+// Opening Book (Mini ECO)
+// ============================================================================
+
+const OPENINGS = 
+
+[
+  {
+    "eco": "A00",
+    "name": "Polish (Sokolsky) opening",
+    "moves": [
+      "b2b4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Polish, Tuebingen variation",
+    "moves": [
+      "b2b4",
+      "b1h6"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Polish, Outflank variation",
+    "moves": [
+      "b2b4",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Benko's opening",
+    "moves": [
+      "g2g3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Lasker simul special",
+    "moves": [
+      "g2g3",
+      "h7h5"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Benko's opening, reversed Alekhine",
+    "moves": [
+      "g2g3",
+      "e7e5",
+      "b1f3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Grob's attack",
+    "moves": [
+      "g2g4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Grob, spike attack",
+    "moves": [
+      "g2g4",
+      "d7d5",
+      "c1g2",
+      "c7c6",
+      "g7g5"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Grob, Fritz gambit",
+    "moves": [
+      "g2g4",
+      "d7d5",
+      "c1g2",
+      "f1g4",
+      "c2c4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Grob, Romford counter-gambit",
+    "moves": [
+      "g2g4",
+      "d7d5",
+      "c1g2",
+      "f1g4",
+      "c2c4",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Clemenz (Mead's, Basman's or de Klerk's) opening",
+    "moves": [
+      "h2h3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Global opening",
+    "moves": [
+      "h2h3",
+      "e7e5",
+      "a2a3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Amar (Paris) opening",
+    "moves": [
+      "b1h3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Amar gambit",
+    "moves": [
+      "b1h3",
+      "d7d5",
+      "g2g3",
+      "e7e5",
+      "f2f4",
+      "c1h3",
+      "f1h3",
+      "e2f4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Dunst (Sleipner, Heinrichsen) opening",
+    "moves": [
+      "b1c3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Dunst (Sleipner,Heinrichsen) opening",
+    "moves": [
+      "b1c3",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Battambang opening",
+    "moves": [
+      "b1c3",
+      "e7e5",
+      "a2a3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Novosibirsk opening",
+    "moves": [
+      "b1c3",
+      "c7c5",
+      "d2d4",
+      "c2d4",
+      "d1d4",
+      "g1c6",
+      "d8h4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Anderssen's opening",
+    "moves": [
+      "a2a3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Ware (Meadow Hay) opening",
+    "moves": [
+      "a2a4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Crab opening",
+    "moves": [
+      "a2a4",
+      "e7e5",
+      "h2h4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Saragossa opening",
+    "moves": [
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Mieses opening",
+    "moves": [
+      "d2d3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Mieses opening",
+    "moves": [
+      "d2d3",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Valencia opening",
+    "moves": [
+      "d2d3",
+      "e7e5",
+      "b1d2"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Venezolana opening",
+    "moves": [
+      "d2d3",
+      "c7c5",
+      "b1c3",
+      "g1c6",
+      "g2g3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Van't Kruijs opening",
+    "moves": [
+      "e2e3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Amsterdam attack",
+    "moves": [
+      "e2e3",
+      "e7e5",
+      "c2c4",
+      "d7d6",
+      "b1c3",
+      "g1c6",
+      "b2b3",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Gedult's opening",
+    "moves": [
+      "f2f3"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Hammerschlag (Fried fox/Pork chop opening)",
+    "moves": [
+      "f2f3",
+      "e7e5",
+      "e1f2"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Anti-Borg (Desprez) opening",
+    "moves": [
+      "h2h4"
+    ]
+  },
+  {
+    "eco": "A00",
+    "name": "Durkin's attack",
+    "moves": [
+      "b1a3"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack",
+    "moves": [
+      "b2b3"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, modern variation",
+    "moves": [
+      "b2b3",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, Indian variation",
+    "moves": [
+      "b2b3",
+      "b1f6"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, classical variation",
+    "moves": [
+      "b2b3",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, English variation",
+    "moves": [
+      "b2b3",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, Dutch variation",
+    "moves": [
+      "b2b3",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, Polish variation",
+    "moves": [
+      "b2b3",
+      "b7b5"
+    ]
+  },
+  {
+    "eco": "A01",
+    "name": "Nimzovich-Larsen attack, symmetrical variation",
+    "moves": [
+      "b2b3",
+      "b7b6"
+    ]
+  },
+  {
+    "eco": "A02",
+    "name": "-A03 Bird's opening",
+    "moves": [
+      "f2f4"
+    ]
+  },
+  {
+    "eco": "A04",
+    "name": "-A09 Reti opening",
+    "moves": [
+      "b1f3"
+    ]
+  },
+  {
+    "eco": "A10",
+    "name": "-A39 English opening",
+    "moves": [
+      "c2c4"
+    ]
+  },
+  {
+    "eco": "A40",
+    "name": "-A41 Queen's pawn",
+    "moves": [
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "A42",
+    "name": "Modern defence, Averbakh system",
+    "moves": [
+      "d2d4",
+      "d7d6",
+      "c2c4",
+      "g7g6",
+      "b1c3",
+      "c1g7",
+      "e2e4"
+    ]
+  },
+  {
+    "eco": "A42",
+    "name": "Pterodactyl defence",
+    "moves": [
+      "d2d4",
+      "d7d6",
+      "c2c4",
+      "g7g6",
+      "b1c3",
+      "c1g7",
+      "e2e4",
+      "c7c5",
+      "g1f3",
+      "d1a5"
+    ]
+  },
+  {
+    "eco": "A42",
+    "name": "Modern defence, Averbakh system, Randspringer variation",
+    "moves": [
+      "d2d4",
+      "d7d6",
+      "c2c4",
+      "g7g6",
+      "b1c3",
+      "c1g7",
+      "e2e4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "A42",
+    "name": "Modern defence, Averbakh system, Kotov variation",
+    "moves": [
+      "d2d4",
+      "d7d6",
+      "c2c4",
+      "g7g6",
+      "b1c3",
+      "c1g7",
+      "e2e4",
+      "g1c6"
+    ]
+  },
+  {
+    "eco": "A43",
+    "name": "-A44 Old Benoni defence",
+    "moves": [
+      "d2d4",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "A45",
+    "name": "-A46 Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "b1f6"
+    ]
+  },
+  {
+    "eco": "A47",
+    "name": "Queen's Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "g1f3",
+      "b7b6"
+    ]
+  },
+  {
+    "eco": "A47",
+    "name": "Queen's Indian, Marienbad system",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "g1f3",
+      "b7b6",
+      "g2g3",
+      "c1b7",
+      "f1g2",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "A47",
+    "name": "Queen's Indian, Marienbad system, Berg variation",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "g1f3",
+      "b7b6",
+      "g2g3",
+      "c1b7",
+      "f1g2",
+      "c7c5",
+      "c2c4",
+      "c2d4",
+      "d1d4"
+    ]
+  },
+  {
+    "eco": "A48",
+    "name": "-A49 King's Indian, East Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "g1f3",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "A50",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4"
+    ]
+  },
+  {
+    "eco": "A50",
+    "name": "Kevitz-Trajkovich defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "g1c6"
+    ]
+  },
+  {
+    "eco": "A50",
+    "name": "Queen's Indian accelerated",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "b7b6"
+    ]
+  },
+  {
+    "eco": "A51",
+    "name": "-A52 Budapest defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "A53",
+    "name": "-A55 Old Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "d7d6"
+    ]
+  },
+  {
+    "eco": "A56",
+    "name": "Benoni defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "A56",
+    "name": "Benoni defence, Hromodka system",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "d7d6"
+    ]
+  },
+  {
+    "eco": "A56",
+    "name": "Vulture defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "g1e4"
+    ]
+  },
+  {
+    "eco": "A56",
+    "name": "Czech Benoni defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "A56",
+    "name": "Czech Benoni, King's Indian system",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "e7e5",
+      "g1c3",
+      "d7d6",
+      "e2e4",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "A57",
+    "name": "-A59 Benko gambit",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "b7b5"
+    ]
+  },
+  {
+    "eco": "A60",
+    "name": "-A79 Benoni defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "c7c5",
+      "d7d5",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "A80",
+    "name": "-A99 Dutch",
+    "moves": [
+      "d2d4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "King's pawn opening",
+    "moves": [
+      "e2e4"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Hippopotamus defence",
+    "moves": [
+      "e2e4",
+      "b1h6",
+      "d2d4",
+      "g7g6",
+      "c2c4",
+      "f7f6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Corn stalk defence",
+    "moves": [
+      "e2e4",
+      "a7a5"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Lemming defence",
+    "moves": [
+      "e2e4",
+      "b1a6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Fred",
+    "moves": [
+      "e2e4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Barnes defence",
+    "moves": [
+      "e2e4",
+      "f7f6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Fried fox defence",
+    "moves": [
+      "e2e4",
+      "f7f6",
+      "d2d4",
+      "e1f7"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Carr's defence",
+    "moves": [
+      "e2e4",
+      "h7h6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Reversed Grob (Borg/Basman defence/macho Grob)",
+    "moves": [
+      "e2e4",
+      "g7g5"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "St. George (Baker) defence",
+    "moves": [
+      "e2e4",
+      "a7a6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Owen defence",
+    "moves": [
+      "e2e4",
+      "b7b6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "Guatemala defence",
+    "moves": [
+      "e2e4",
+      "b7b6",
+      "d2d4",
+      "c1a6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence",
+    "moves": [
+      "e2e4",
+      "b1c6"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence, Wheeler gambit",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "b2b4",
+      "g1b4",
+      "c2c3",
+      "b8c6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "g1f3"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Colorado counter",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "g1f3",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence, Marshall gambit",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "d2d4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "g1c3"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Nimzovich defence, Bogolyubov variation",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "d2d4",
+      "d7d5",
+      "g1c3"
+    ]
+  },
+  {
+    "eco": "B00",
+    "name": "KP, Neo-Mongoloid defence",
+    "moves": [
+      "e2e4",
+      "b1c6",
+      "d2d4",
+      "f7f6"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian (centre counter) defence",
+    "moves": [
+      "e2e4",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian defence, Lasker variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "g1f6",
+      "b8f3",
+      "c1g4",
+      "h2h3"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian defence",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "g1f6",
+      "b8f3",
+      "c1f5"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian defence, Gruenfeld variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "g1f6",
+      "b8f3",
+      "c1f5",
+      "g8e5",
+      "c7c6",
+      "g2g4"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Anderssen counter-attack",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Anderssen counter-attack orthodox attack",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "e7e5",
+      "d7e5",
+      "c1b4",
+      "f1d2",
+      "g1c6",
+      "b8f3"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Anderssen counter-attack, Goteborg system",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "e7e5",
+      "g1f3"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Anderssen counter-attack, Collijn variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "d2d4",
+      "e7e5",
+      "g1f3",
+      "c1g4"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Mieses-Kotrvc gambit",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8a5",
+      "b2b4"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Pytel-Wade variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "d1d5",
+      "b1c3",
+      "d8d6"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian defence",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Icelandic gambit",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "c2c4",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian gambit",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "c2c4",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian defence",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Marshall variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "d2d4",
+      "g1d5"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Kiel variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "d2d4",
+      "g1d5",
+      "c2c4",
+      "b8b4"
+    ]
+  },
+  {
+    "eco": "B01",
+    "name": "Scandinavian, Richter variation",
+    "moves": [
+      "e2e4",
+      "d7d5",
+      "e7d5",
+      "b1f6",
+      "d2d4",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "B02",
+    "name": "-B05 Alekhine's defence",
+    "moves": [
+      "e2e4",
+      "b1f6"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch (modern) defence",
+    "moves": [
+      "e2e4",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Norwegian defence",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "b1f6",
+      "e7e5",
+      "g1h5",
+      "g2g4",
+      "b8g7"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch (modern) defence",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence, three pawns attack",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "f2f4"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence, Gurgenidze variation",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3",
+      "c7c6",
+      "f2f4",
+      "d7d5",
+      "e7e5",
+      "h7h5"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch (modern) defence",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3",
+      "d7d6"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence, two knights variation",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3",
+      "d7d6",
+      "g1f3"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence, two knights, Suttles variation",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3",
+      "d7d6",
+      "g1f3",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "B06",
+    "name": "Robatsch defence, Pseudo-Austrian attack",
+    "moves": [
+      "e2e4",
+      "g7g6",
+      "d2d4",
+      "c1g7",
+      "b1c3",
+      "d7d6",
+      "f2f4"
+    ]
+  },
+  {
+    "eco": "B07",
+    "name": "-B09 Pirc defence",
+    "moves": [
+      "e2e4",
+      "d7d6",
+      "d2d4",
+      "b1f6",
+      "g1c3"
+    ]
+  },
+  {
+    "eco": "B10",
+    "name": "-B19 Caro-Kann defence",
+    "moves": [
+      "e2e4",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "B20",
+    "name": "-B99 Sicilian defence",
+    "moves": [
+      "e2e4",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "C00",
+    "name": "-C19 French defence",
+    "moves": [
+      "e2e4",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "King's pawn game",
+    "moves": [
+      "e2e4",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, Indian opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "d2d3"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, Mengarini's opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "a2a3"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, King's head opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "f2f3"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, Patzer opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "d1h5"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, Napoleon's opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "d1f3"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "KP, Lopez opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C20",
+    "name": "Alapin's opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1e2"
+    ]
+  },
+  {
+    "eco": "C21",
+    "name": "-C22 Centre game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "d2d4",
+      "e2d4"
+    ]
+  },
+  {
+    "eco": "C23",
+    "name": "-C24 Bishop's opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C25",
+    "name": "-C29 Vienna game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1c3"
+    ]
+  },
+  {
+    "eco": "C30",
+    "name": "-C39 King's gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "f2f4"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "King's knight opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Gunderam defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d1e7"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Greco defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d1f6"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Damiano's defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f6"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "QP counter-gambit (elephant gambit)",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "QP counter-gambit, Maroczy gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d5",
+      "e7d5",
+      "c1d6"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian counter-gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian, Nimzovich variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "g1e5",
+      "d1f6",
+      "d2d4",
+      "d7d6",
+      "b8c4",
+      "f2e4",
+      "g8e3"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian, Fraser defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "g1e5",
+      "b8c6"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian gambit, 3.Bc4",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian, Behting variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "c1c4",
+      "f2e4",
+      "g1e5",
+      "d1g5",
+      "b8f7",
+      "d8g2",
+      "a1f1",
+      "d7d5",
+      "g8h8",
+      "h8f6"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian, Polerio variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "c1c4",
+      "f2e4",
+      "g1e5",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "C40",
+    "name": "Latvian, corkscrew counter-gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "f7f5",
+      "c1c4",
+      "f2e4",
+      "g1e5",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor's defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Steinitz variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "c1c4",
+      "f1e7",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Lopez counter-gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "c1c4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Lopez counter-gambit, Jaenisch variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "c1c4",
+      "f7f5",
+      "d2d4",
+      "e2d4",
+      "g1g5",
+      "b8h6",
+      "g8h7"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor's defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Philidor counter-gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Philidor counter-gambit, del Rio attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "f7f5",
+      "d7e5",
+      "f2e4",
+      "g1g5",
+      "d7d5",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Philidor counter-gambit, Berger variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "f7f5",
+      "d7e5",
+      "f2e4",
+      "g1g5",
+      "d7d5",
+      "e7e6",
+      "c1c5",
+      "b8c3"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Philidor counter-gambit, Zukertort variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "f7f5",
+      "g1c3"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, exchange variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Boden variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "d1d4",
+      "c1d7"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, exchange variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "g1d4"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Paulsen attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "g1d4",
+      "d7d5",
+      "e7d5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, exchange variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "g1d4",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Berger variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "g1d4",
+      "b8f6",
+      "g8c3",
+      "c1e7",
+      "f1e2",
+      "O-O",
+      "O-O",
+      "c7c5",
+      "f3f3",
+      "d4c6",
+      "c8g5",
+      "f8e6",
+      "a1e1"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Larsen variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "e2d4",
+      "g1d4",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich (Jaenisch) variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Improved Hanham variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "b8c3",
+      "Nbd7"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Sozin variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "b8c3",
+      "Nbd7",
+      "c1c4",
+      "f1e7",
+      "O-O",
+      "O-O",
+      "d1e2",
+      "c7c6",
+      "a2a4",
+      "e2d4"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Larobok variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "b8c3",
+      "Nbd7",
+      "c1c4",
+      "f1e7",
+      "g8g5",
+      "O-O",
+      "c8f7"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "d7e5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Sokolsky variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "d7e5",
+      "b8e4",
+      "Nbd2"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Rellstab variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "d7e5",
+      "b8e4",
+      "d1d5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Locock variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "b8g5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Nimzovich, Klein variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1f6",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Krause variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "O-O"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Steiner variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "O-O",
+      "f1e7",
+      "d7e5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Kmoch variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "b8g5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Berger variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "b8g5",
+      "g8h6",
+      "f2f4",
+      "f1e7",
+      "O-O",
+      "O-O",
+      "c2c3",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Schlechter variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "b8c3"
+    ]
+  },
+  {
+    "eco": "C41",
+    "name": "Philidor, Hanham, Delmar variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "d7d6",
+      "d2d4",
+      "g1d7",
+      "c1c4",
+      "c7c6",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C42",
+    "name": "-C43 Petrov's defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1f6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "King's pawn game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Irish (Chicago) gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8e5",
+      "g8e5",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Konstantinopolsky opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "g2g3"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Dresden opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Inverted Hungarian",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1e2"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Inverted Hanham",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1e2",
+      "b8f6",
+      "d2d3",
+      "d7d5",
+      "Nbd2"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Tayler opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1e2",
+      "b8f6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Caro variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "d7d5",
+      "d1a4",
+      "c1d7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Leonhardt variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "d7d5",
+      "d1a4",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Steinitz variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "d7d5",
+      "d1a4",
+      "f7f6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Jaenisch counter-attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Fraser defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "b8f6",
+      "d2d4",
+      "g8e4",
+      "d7d5",
+      "c1c5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Reti variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "Nge7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani, Romanishin variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "c1e7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani counter-gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani counter-gambit, Schmidt attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "f7f5",
+      "d2d4",
+      "d7d6",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Ponziani counter-gambit, Cordel variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c2c3",
+      "f7f5",
+      "d2d4",
+      "d7d6",
+      "d7d5",
+      "f2e4",
+      "b8g5",
+      "g8b8",
+      "f3e4",
+      "e4f6",
+      "c1d3",
+      "f1e7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch opening",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Lolli variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "b8d4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Cochrane variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "b8d4",
+      "g8e5",
+      "e5e6",
+      "c1c4",
+      "c7c6",
+      "O-O",
+      "f3f6",
+      "d4f7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Relfsson gambit ('MacLopez')",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1b5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Goering gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Sea-cadet mate",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c2c3",
+      "d2c3",
+      "b8c3",
+      "d7d6",
+      "c1c4",
+      "f1g4",
+      "O-O",
+      "g8e5",
+      "e5e5",
+      "c8d1",
+      "f8f7",
+      "e1e7",
+      "f3d5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Goering gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c2c3",
+      "d2c3",
+      "b8c3",
+      "c1b4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch, Goering gambit, Bardeleben variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c2c3",
+      "d2c3",
+      "b8c3",
+      "c1b4",
+      "f1c4",
+      "g8f6"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Anderssen (Paulsen, Suhle) counter-attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1c5",
+      "O-O",
+      "d7d6",
+      "c2c3",
+      "c8g4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1c5",
+      "b8g5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Cochrane-Shumov defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1c5",
+      "b8g5",
+      "g8h6",
+      "f3f7",
+      "f7f7",
+      "c8f7",
+      "e1f7",
+      "d1h5",
+      "g7g6",
+      "d8c5",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Vitzhum attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1c5",
+      "b8g5",
+      "g8h6",
+      "d1h5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1b4"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Hanneken variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1b4",
+      "c2c3",
+      "d2c3",
+      "O-O",
+      "c2b2",
+      "c8b2",
+      "b8f6",
+      "g8g5",
+      "O-O",
+      "e7e5",
+      "f3e5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1b4",
+      "c2c3",
+      "d2c3",
+      "b2c3"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Cochrane variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1b4",
+      "c2c3",
+      "d2c3",
+      "b2c3",
+      "c8a5",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Benima defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "f1e7"
+    ]
+  },
+  {
+    "eco": "C44",
+    "name": "Scotch gambit, Dubois-Reti defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "c1c4",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Ghulam Kassim variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "g8d4",
+      "d1d4",
+      "d7d6",
+      "c1d3"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Pulling counter-attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Horwitz attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8b5"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Berger variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8b5",
+      "c1b4",
+      "f3d2",
+      "d8e4",
+      "f1e2",
+      "e4g2",
+      "c8f3",
+      "g2h3",
+      "c6c7",
+      "e1d8",
+      "c7a8",
+      "a8f6",
+      "1"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8b5",
+      "c1b4",
+      "f1d2"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Rosenthal variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8b5",
+      "c1b4",
+      "f1d2",
+      "d8e4",
+      "c8e2",
+      "e1d8",
+      "O-O",
+      "f8d2",
+      "f3d2",
+      "e4g6"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Fraser attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8f3"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Steinitz variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "d1h4",
+      "g8c3"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Schmidt variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "g8f6"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Mieses variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "g8f6",
+      "f3c6",
+      "b7c6",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Tartakower variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "g8f6",
+      "f3c6",
+      "b7c6",
+      "d4d2"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Blackburne attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "c2c3",
+      "Nge7",
+      "d8d2"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Gottschall variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "c2c3",
+      "Nge7",
+      "d8d2",
+      "d7d5",
+      "g8b5",
+      "c8e3",
+      "f6e3",
+      "O-O",
+      "f3c7",
+      "a1b8",
+      "1"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Paulsen attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "c2c3",
+      "Nge7",
+      "c8b5"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Paulsen, Gunsberg defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "c2c3",
+      "Nge7",
+      "c8b5",
+      "g8d8"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Meitner variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "c2c3",
+      "Nge7",
+      "g8c2"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Blumenfeld attack",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "f1e3",
+      "d1f6",
+      "g8b5"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Potter variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "g8b3"
+    ]
+  },
+  {
+    "eco": "C45",
+    "name": "Scotch, Romanishin variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "d2d4",
+      "e2d4",
+      "b8d4",
+      "c1c5",
+      "g8b3",
+      "f1b4"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Three knights game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Three knights, Schlechter variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "c1b4",
+      "g8d5",
+      "f3f6"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Three knights, Winawer defence (Gothic defence)",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Three knights, Steinitz variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g7g6"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Three knights, Steinitz, Rosenthal variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g7g6",
+      "d2d4",
+      "e2d4",
+      "g8d5"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Four knights game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g8f6"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Four knights, Schultze-Mueller gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g8f6",
+      "f3e5"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Four knights, Italian variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g8f6",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C46",
+    "name": "Four knights, Gunsberg variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g8f6",
+      "a2a3"
+    ]
+  },
+  {
+    "eco": "C47",
+    "name": "-C49 Four knights, Scotch variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "b8c3",
+      "g8f6",
+      "d2d4"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Italian Game",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Blackburne shilling gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "b8d4",
+      "g8e5",
+      "d1g5",
+      "e5f7",
+      "d8g2",
+      "a1f1",
+      "g2e4",
+      "c8e2",
+      "f7f3"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Rousseau gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f7f5"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Hungarian defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1e7"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Hungarian defence, Tartakower variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1e7",
+      "d2d4",
+      "e2d4",
+      "c2c3",
+      "b8f6",
+      "e7e5",
+      "g8e4"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Piano",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Piano, four knights variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "b8c3",
+      "g8f6"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Piano, Jerome gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "c8f7"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Pianissimo",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "d2d3"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Pianissimo, Dubois variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "d2d3",
+      "f7f5",
+      "b8g5",
+      "f2f4"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Pianissimo",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "d2d3",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Pianissimo, Italian four knights variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "d2d3",
+      "b8f6",
+      "g8c3"
+    ]
+  },
+  {
+    "eco": "C50",
+    "name": "Giuoco Pianissimo, Canal variation",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "d2d3",
+      "b8f6",
+      "g8c3",
+      "d7d6",
+      "c8g5"
+    ]
+  },
+  {
+    "eco": "C51",
+    "name": "-C52 Evans gambit",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "b2b4"
+    ]
+  },
+  {
+    "eco": "C53",
+    "name": "-C54 Giuoco Piano",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "f1c5",
+      "c2c3"
+    ]
+  },
+  {
+    "eco": "C55",
+    "name": "-C59 Two knights defence",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1c4",
+      "b8f6"
+    ]
+  },
+  {
+    "eco": "C60",
+    "name": "-C99 Ruy Lopez (Spanish opening)",
+    "moves": [
+      "e2e4",
+      "e7e5",
+      "b1f3",
+      "g1c6",
+      "c1b5"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn, Mason variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c1f4"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn, Mason variation, Steinitz counter-gambit",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c1f4",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Levitsky attack (Queen's bishop attack)",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Blackmar gambit",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "e2e4"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn, stonewall attack",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "e2e3",
+      "b1f6",
+      "c1d3"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn, Chigorin variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Queen's pawn, Anti-Veresov",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "c1g4"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Blackmar-Diemer gambit",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "e2e4"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Blackmar-Diemer, Euwe defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "e2e4",
+      "d2e4",
+      "f2f3",
+      "e2f3",
+      "b8f3",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "D00",
+    "name": "Blackmar-Diemer, Lemberg counter-gambit",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "e2e4",
+      "e7e5"
+    ]
+  },
+  {
+    "eco": "D01",
+    "name": "Richter-Veresov attack",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "D01",
+    "name": "Richter-Veresov attack, Veresov variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "c1g5",
+      "f1f5",
+      "c8f6"
+    ]
+  },
+  {
+    "eco": "D01",
+    "name": "Richter-Veresov attack, Richter variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1c3",
+      "g1f6",
+      "c1g5",
+      "f1f5",
+      "f2f3"
+    ]
+  },
+  {
+    "eco": "D02",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3"
+    ]
+  },
+  {
+    "eco": "D02",
+    "name": "Queen's pawn game, Chigorin variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "g1c6"
+    ]
+  },
+  {
+    "eco": "D02",
+    "name": "Queen's pawn game, Krause variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "D02",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "g1f6"
+    ]
+  },
+  {
+    "eco": "D02",
+    "name": "London System",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "g1f6",
+      "c1f4"
+    ]
+  },
+  {
+    "eco": "D03",
+    "name": "Torre attack (Tartakower variation)",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "g1f6",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "D04",
+    "name": "-D05 Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "b1f3",
+      "g1f6",
+      "e2e3"
+    ]
+  },
+  {
+    "eco": "D06",
+    "name": "Queen's Gambit",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4"
+    ]
+  },
+  {
+    "eco": "D06",
+    "name": "Queen's Gambit Declined, Grau (Sahovic) defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c1f5"
+    ]
+  },
+  {
+    "eco": "D06",
+    "name": "Queen's Gambit Declined, Marshall defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "b1f6"
+    ]
+  },
+  {
+    "eco": "D06",
+    "name": "Queen's Gambit Declined, symmetrical (Austrian) defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c5"
+    ]
+  },
+  {
+    "eco": "D07",
+    "name": "-D09 Queen's Gambit Declined, Chigorin defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "b1c6"
+    ]
+  },
+  {
+    "eco": "D10",
+    "name": "-D15 Queen's Gambit Declined Slav defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "D16",
+    "name": "Queen's Gambit Declined Slav accepted, Alapin variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6",
+      "b1f3",
+      "g1f6",
+      "b8c3",
+      "d2c4",
+      "a2a4"
+    ]
+  },
+  {
+    "eco": "D16",
+    "name": "Queen's Gambit Declined Slav, Smyslov variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6",
+      "b1f3",
+      "g1f6",
+      "b8c3",
+      "d2c4",
+      "a2a4",
+      "g8a6",
+      "e2e4",
+      "c1g4"
+    ]
+  },
+  {
+    "eco": "D16",
+    "name": "Queen's Gambit Declined Slav, Soultanbeieff variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6",
+      "b1f3",
+      "g1f6",
+      "b8c3",
+      "d2c4",
+      "a2a4",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "D16",
+    "name": "Queen's Gambit Declined Slav, Steiner variation",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6",
+      "b1f3",
+      "g1f6",
+      "b8c3",
+      "d2c4",
+      "a2a4",
+      "c1g4"
+    ]
+  },
+  {
+    "eco": "D17",
+    "name": "-D19 Queen's Gambit Declined Slav, Czech defence",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "c7c6",
+      "b1f3",
+      "g1f6",
+      "b8c3",
+      "d2c4",
+      "a2a4",
+      "c1f5"
+    ]
+  },
+  {
+    "eco": "D20",
+    "name": "-D29 Queen's gambit accepted",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "d2c4"
+    ]
+  },
+  {
+    "eco": "D30",
+    "name": "-D42 Queen's gambit declined",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "D43",
+    "name": "-D49 Queen's Gambit Declined semi-Slav",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "e7e6",
+      "b1c3",
+      "g1f6",
+      "b8f3",
+      "c7c6"
+    ]
+  },
+  {
+    "eco": "D50",
+    "name": "-D69 Queen's Gambit Declined, 4.Bg5",
+    "moves": [
+      "d2d4",
+      "d7d5",
+      "c2c4",
+      "e7e6",
+      "b1c3",
+      "g1f6",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "D70",
+    "name": "-D79 Neo-Gruenfeld defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "g7g6",
+      "f2f3",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "D80",
+    "name": "-D99 Gruenfeld defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "g7g6",
+      "g1c3",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "E00",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6"
+    ]
+  },
+  {
+    "eco": "E00",
+    "name": "Neo-Indian (Seirawan) attack",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "E00",
+    "name": "Catalan opening",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g2g3"
+    ]
+  },
+  {
+    "eco": "E01",
+    "name": "-E09 Catalan, closed",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g2g3",
+      "d7d5",
+      "c1g2"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Queen's pawn game",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Blumenfeld counter-gambit",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c7c5",
+      "d7d5",
+      "b7b5"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Blumenfeld counter-gambit accepted",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c7c5",
+      "d7d5",
+      "b7b5",
+      "d7e6",
+      "f7e6",
+      "c7b5",
+      "d7d5"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Blumenfeld counter-gambit, Dus-Chotimursky variation",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c7c5",
+      "d7d5",
+      "b7b5",
+      "c1g5"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Blumenfeld counter-gambit, Spielmann variation",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c7c5",
+      "d7d5",
+      "b7b5",
+      "c1g5",
+      "e7d5",
+      "c7d5",
+      "h7h6"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Dzindzikhashvili defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "a7a6"
+    ]
+  },
+  {
+    "eco": "E10",
+    "name": "Doery defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "b8e4"
+    ]
+  },
+  {
+    "eco": "E11",
+    "name": "Bogo-Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c1b4"
+    ]
+  },
+  {
+    "eco": "E11",
+    "name": "Bogo-Indian defence, Gruenfeld variation",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c1b4",
+      "Nbd2"
+    ]
+  },
+  {
+    "eco": "E11",
+    "name": "Bogo-Indian defence, Nimzovich variation",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c1b4",
+      "f1d2",
+      "d1e7"
+    ]
+  },
+  {
+    "eco": "E11",
+    "name": "Bogo-Indian defence, Monticelli trap",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "c1b4",
+      "f1d2",
+      "c8d2",
+      "d1d2",
+      "b7b6",
+      "g2g3",
+      "f8b7",
+      "b4g2",
+      "O-O",
+      "b8c3",
+      "g8e4",
+      "d8c2",
+      "f6c3",
+      "f3g5"
+    ]
+  },
+  {
+    "eco": "E12",
+    "name": "-E19 Queen's Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1f3",
+      "b7b6"
+    ]
+  },
+  {
+    "eco": "E20",
+    "name": "-E59 Nimzo-Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "e7e6",
+      "g1c3",
+      "c1b4"
+    ]
+  },
+  {
+    "eco": "E60",
+    "name": "-E99 King's Indian defence",
+    "moves": [
+      "d2d4",
+      "b1f6",
+      "c2c4",
+      "g7g6"
+    ]
+  }
+]
+
+
+
+function getOpeningName(moveHistory) {
+	// Convert move objects to UCI (e2e4, etc.)
+	const uciMoves = moveHistory.map(mv => {
+		if (!mv || !mv.from || !mv.to) return "";
+		return (
+			String.fromCharCode(97 + mv.from.x) + (8 - mv.from.y) +
+			String.fromCharCode(97 + mv.to.x) + (8 - mv.to.y)
+		);
+	});
+	let best = { name: "(Unrecognized Opening)", len: 0 };
+	for (const entry of OPENINGS) {
+		let match = true;
+		for (let i = 0; i < entry.moves.length; i++) {
+			if (uciMoves[i] !== entry.moves[i]) { match = false; break; }
+		}
+		if (match && entry.moves.length > best.len) {
+			best = { name: entry.name, len: entry.moves.length };
+		}
+	}
+	return best.len > 0 ? best.name : "(Unrecognized Opening)";
+}
+
+// ============================================================================
+// Move List Rendering (Two-Column Format)
+// ============================================================================
+
+
+function renderMoveList() {
+	if (!moveList) return;
+	const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
+	const moves = state.moveHistory;
+
+	// Opening name display
+	const openingName = getOpeningName(moves);
+	let html = `<div style="margin-bottom: 6px; color: var(--accent); font-weight: 600; font-size: 13px; text-align: center;">${openingName}</div>`;
+
+	html += '<div style="display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 8px; font-size: 12px;">';
+	for (let i = 0; i < moves.length; i += 2) {
+		const moveNum = Math.floor(i / 2) + 1;
+		const whiteMove = moves[i];
+		const blackMove = moves[i + 1];
+		html += `<div style="text-align: right; color: var(--muted); user-select: none;">${moveNum}.</div>`;
+		html += `<div style="cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: background 0.15s;" 
+			class="move-item" data-index="${i}" 
+			onmouseover="this.style.background='rgba(110,193,255,0.15)'" 
+			onmouseout="this.style.background='transparent'">`;
+		html += formatMove(whiteMove);
+		html += '</div>';
+		if (blackMove) {
+			html += `<div style="cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: background 0.15s;" 
+				class="move-item" data-index="${i + 1}" 
+				onmouseover="this.style.background='rgba(110,193,255,0.15)'" 
+				onmouseout="this.style.background='transparent'">`;
+			html += formatMove(blackMove);
+			html += '</div>';
+		} else {
+			html += '<div></div>';
+		}
+	}
+	html += '</div>';
+	moveList.innerHTML = html;
+
+	// Attach click handlers
+	const items = moveList.querySelectorAll('.move-item');
+	items.forEach(item => {
+		item.addEventListener('click', () => {
+			const index = parseInt(item.dataset.index, 10);
+			goToMove(index);
+		});
+	});
+
+	// Remove old FEN/PGN button appends if present
+	const oldFenBtn = document.getElementById('btn-load-fen');
+	if (oldFenBtn && oldFenBtn.parentNode === moveList) moveList.removeChild(oldFenBtn);
+	const oldCopyFenBtn = document.getElementById('btn-copy-fen');
+	if (oldCopyFenBtn && oldCopyFenBtn.parentNode === moveList) moveList.removeChild(oldCopyFenBtn);
+	const oldPgnBtn = document.getElementById('btn-load-pgn');
+	if (oldPgnBtn && oldPgnBtn.parentNode === moveList) moveList.removeChild(oldPgnBtn);
+	const oldCopyPgnBtn = document.getElementById('btn-copy-pgn');
+	if (oldCopyPgnBtn && oldCopyPgnBtn.parentNode === moveList) moveList.removeChild(oldCopyPgnBtn);
+
+	// Create a single row for FEN and PGN buttons
+	const btnRow = document.createElement('div');
+	btnRow.style.display = 'flex';
+	btnRow.style.gap = '6px';
+	btnRow.style.marginTop = '8px';
+
+	// FEN buttons
+	const fenBtn = document.createElement('button');
+	fenBtn.id = 'btn-load-fen';
+	fenBtn.textContent = 'Load FEN';
+	fenBtn.style.padding = '4px 8px';
+	fenBtn.style.fontSize = '12px';
+	fenBtn.style.cursor = 'pointer';
+	fenBtn.style.borderRadius = '4px';
+	fenBtn.onclick = () => {
+		const fen = prompt('Paste FEN:');
+		if (fen) {
+			restoreFromFEN(fen);
+			state.positionHistory = [fen];
+			render();
+		}
+	};
+	btnRow.appendChild(fenBtn);
+
+	const copyFenBtn = document.createElement('button');
+	copyFenBtn.id = 'btn-copy-fen';
+	copyFenBtn.textContent = 'Copy FEN';
+	copyFenBtn.style.padding = '4px 8px';
+	copyFenBtn.style.fontSize = '12px';
+	copyFenBtn.style.cursor = 'pointer';
+	copyFenBtn.style.borderRadius = '4px';
+	copyFenBtn.onclick = () => {
+		const fen = boardToFEN();
+		navigator.clipboard.writeText(fen);
+		alert('FEN copied!');
+	};
+	btnRow.appendChild(copyFenBtn);
+
+	// Load PGN button
+	const loadPgnBtn = document.createElement('button');
+	loadPgnBtn.id = 'btn-load-pgn';
+	loadPgnBtn.textContent = 'Load PGN';
+	loadPgnBtn.style.padding = '4px 8px';
+	loadPgnBtn.style.fontSize = '12px';
+	loadPgnBtn.style.cursor = 'pointer';
+	loadPgnBtn.style.borderRadius = '4px';
+	loadPgnBtn.onclick = function() {
+		let fileInput = document.getElementById('pgnFileInput');
+		if (!fileInput) {
+			fileInput = document.createElement('input');
+			fileInput.type = 'file';
+			fileInput.accept = '.pgn,text/plain';
+			fileInput.style.display = 'none';
+			fileInput.id = 'pgnFileInput';
+			fileInput.addEventListener('change', function(e) {
+				const file = fileInput.files && fileInput.files[0];
+				if (!file) return;
+				const reader = new FileReader();
+				reader.onload = function(evt) {
+					const text = evt.target.result;
+					if (typeof window.loadPGN === 'function') {
+						window.loadPGN(text);
+					} else {
+						alert('PGN loader not found.');
+					}
+				};
+				reader.readAsText(file);
+			});
+			document.body.appendChild(fileInput);
+		}
+		fileInput.value = '';
+		fileInput.click();
+	};
+	btnRow.appendChild(loadPgnBtn);
+
+	const copyPgnBtn = document.createElement('button');
+	copyPgnBtn.id = 'btn-copy-pgn';
+	copyPgnBtn.textContent = 'Copy PGN';
+	copyPgnBtn.style.padding = '4px 8px';
+	copyPgnBtn.style.fontSize = '12px';
+	copyPgnBtn.style.cursor = 'pointer';
+	copyPgnBtn.style.borderRadius = '4px';
+	copyPgnBtn.onclick = () => {
+		if (typeof generatePGN === 'function') {
+			const pgn = generatePGN();
+			navigator.clipboard.writeText(pgn);
+			alert('PGN copied!');
+		}
+	};
+	btnRow.appendChild(copyPgnBtn);
+
+	// Add PGN search box below the buttons row
+	const searchBox = document.createElement('input');
+	searchBox.id = 'pgnSearch';
+	searchBox.type = 'text';
+	searchBox.placeholder = 'Search games...';
+	searchBox.style.fontSize = '12px';
+	searchBox.style.padding = '4px 8px';
+	searchBox.style.borderRadius = '4px';
+	searchBox.style.margin = '8px 0 0 0';
+	searchBox.style.width = '100%';
+    // Ensure it's clickable and focusable even if other DOM handlers exist
+    searchBox.style.pointerEvents = 'auto';
+    searchBox.style.zIndex = '20';
+    searchBox.addEventListener('mousedown', function(e) { e.stopPropagation(); this.focus(); });
+    // Show search results list and let user click to load specific game
+    const resultsDiv = document.createElement('div');
+    resultsDiv.id = 'pgnSearchResults';
+    resultsDiv.style.maxHeight = '220px';
+    resultsDiv.style.overflow = 'auto';
+    resultsDiv.style.margin = '6px 0 12px 0';
+    resultsDiv.style.display = 'none';
+
+    function buildLabelUI(g, i) {
+        const t = g.tags || {};
+        return `${i + 1}: ${t.White || 'White'} vs ${t.Black || 'Black'}${t.Event ? ' — ' + t.Event : ''}${t.Date ? ' (' + t.Date + ')' : ''}`;
+    }
+// ...inside renderMoveList, after searchBox and resultsDiv are created...
+
+searchBox.addEventListener('input', function() {
+    const val = this.value.trim().toLowerCase();
+    resultsDiv.innerHTML = '';
+    if (!val || val.length < 2) { resultsDiv.style.display = 'none'; return; }
+
+    // --- Opening search: match name, eco, or moves ---
+    const openingMatches = OPENINGS.filter(o => {
+        // Match by name
+        if (o.name.toLowerCase().includes(val)) return true;
+        // Match by ECO code
+        if (o.eco && o.eco.toLowerCase().includes(val)) return true;
+        // Match by moves (as space-separated UCI)
+        if (o.moves && o.moves.join(' ').toLowerCase().includes(val)) return true;
+        return false;
+    });
+
+    // Store opening match data for delegation
+    let openingMatchData = [];
+    if (openingMatches.length > 0) {
+      for (let i = 0; i < Math.min(openingMatches.length, 10); i++) {
+        const o = openingMatches[i];
+        const item = document.createElement('div');
+        item.className = 'pgn-search-item';
+        item.style.padding = '6px 8px';
+        item.style.borderRadius = '6px';
+        item.style.cursor = 'pointer';
+        item.style.color = 'var(--accent)';
+        item.style.marginBottom = '4px';
+        item.textContent = `[Opening] ${o.eco} — ${o.name}`;
+        // Store index for delegation
+        item.setAttribute('data-opening-index', i);
+        openingMatchData[i] = o;
+        // Log when adding each opening result
+        console.log('[DEBUG] Added opening search result:', o.eco, o.name, item);
+        resultsDiv.appendChild(item);
+      }
+      // Divider if there are also PGN matches
+      if (typeof window.searchPGNGames === 'function' && window.searchPGNGames(val).length > 0) {
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-bottom:1px solid #333;margin:6px 0;';
+        resultsDiv.appendChild(divider);
+      }
+    }
+
+    // Event delegation for opening search results
+    resultsDiv.onclick = function(e) {
+      let el = e.target;
+      while (el && el !== resultsDiv) {
+        if (el.classList && el.classList.contains('pgn-search-item') && el.hasAttribute('data-opening-index')) {
+          const idx = parseInt(el.getAttribute('data-opening-index'), 10);
+          const o = openingMatchData[idx];
+          if (!o) return;
+          e.stopPropagation();
+          e.preventDefault();
+          console.log('[DEBUG] Delegated opening clicked:', o.eco, o.name, o.moves);
+          resetBoard();
+          setTimeout(() => {
+            let moveCount = 0;
+            for (const move of o.moves) {
+              const legal = generateLegalMoves(state.turn);
+              const mv = legal.find(m => {
+                const from = String.fromCharCode(97 + m.from.x) + (8 - m.from.y);
+                const to = String.fromCharCode(97 + m.to.x) + (8 - m.to.y);
+                return (from + to) === move;
+              });
+              if (mv) {
+                makeMove(mv);
+                moveCount++;
+                console.log(`[DEBUG] Made move: ${move}`);
+              } else {
+                console.warn(`[DEBUG] Move not found in legal moves: ${move}`, legal);
+              }
+            }
+            render();
+            updateHud();
+            resultsDiv.style.display = 'none';
+            searchBox.value = '';
+            console.log(`[DEBUG] Finished playing opening. Moves made: ${moveCount}/${o.moves.length}`);
+          }, 10);
+          return;
+        }
+        el = el.parentElement;
+      }
+    };
+
+    // --- Existing PGN search code ---
+    if (!pgnGames || pgnGames.length === 0) {
+        resultsDiv.innerHTML += '<div style="padding:6px;color:var(--muted)">No PGN games loaded. Click "Load PGN" to import games.</div>';
+        resultsDiv.style.display = 'block';
+        return;
+    }
+    const results = typeof window.searchPGNGames === 'function' ? window.searchPGNGames(val) : window.getPGNGames().filter(g => ((Object.values(g.tags||{}).join(' ') + ' ' + (g.moves||[]).join(' ')).toLowerCase().includes(val)));
+    if (!results || results.length === 0) { resultsDiv.innerHTML += '<div style="padding:6px;color:var(--muted)">No matches</div>'; resultsDiv.style.display = 'block'; return; }
+    for (let r = 0; r < Math.min(results.length, 20); r++) {
+        const g = results[r];
+        const idx = pgnGames.indexOf(g);
+        const item = document.createElement('div');
+        item.className = 'pgn-search-item';
+        item.style.padding = '6px 8px';
+        item.style.borderRadius = '6px';
+        item.style.cursor = 'pointer';
+        item.style.color = 'var(--text)';
+        item.style.marginBottom = '4px';
+        item.textContent = buildLabelUI(g, idx >= 0 ? idx : r);
+        item.addEventListener('click', () => {
+            if (idx >= 0) {
+                currentGameIndex = idx;
+                loadSingleGame(pgnGames[currentGameIndex]);
+            } else {
+                const raw = g.raw || buildRawFromGame(g);
+                loadPGN(raw);
+            }
+            resultsDiv.style.display = 'none';
+            searchBox.value = '';
+        });
+        resultsDiv.appendChild(item);
+    }
+    resultsDiv.style.display = 'block';
+});
+
+    // Remove any existing search bar and button row to prevent duplicates
+    const oldSearch = moveList.querySelector('#pgnSearch');
+    if (oldSearch) moveList.removeChild(oldSearch);
+    const oldBtnRow = moveList.querySelector('.fen-pgn-btn-row');
+    if (oldBtnRow) moveList.removeChild(oldBtnRow);
+    btnRow.className = 'fen-pgn-btn-row';
+
+    moveList.appendChild(btnRow);
+    moveList.appendChild(searchBox);
+    moveList.appendChild(resultsDiv);
+    // Scroll to bottom
+    moveList.scrollTop = moveList.scrollHeight;
+
+}
+
+
+
+
+
+
+function formatMove(mv) {
+	const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
+
+	if (mv.castle === "kingside") {
+		return `O-O${mv.mate ? "#" : mv.check ? "+" : ""}`;
+	}
+	if (mv.castle === "queenside") {
+		return `O-O-O${mv.mate ? "#" : mv.check ? "+" : ""}`;
+	}
+
+	const captureMark = mv.captured ? "x" : "";
+	const promo = mv.promoted ? "=Q" : "";
+	const suffix = mv.mate ? "#" : mv.check ? "+" : "";
+	const piecePart = mv.piece.type === "P" ? (captureMark ? String.fromCharCode(97 + mv.from.x) : "") : mv.piece.type;
+
+	// Use GLYPHS from board.js for the piece glyph
+	let pieceSymbol = "";
+	if (typeof GLYPHS !== "undefined" && mv.piece && mv.piece.type && mv.piece.color) {
+		pieceSymbol = GLYPHS[mv.piece.type]?.[mv.piece.color] || "";
+	}
+
+	return `<span class='piece-symbol' style='font-size:16px;vertical-align:middle;'>${pieceSymbol}</span> ${piecePart}${captureMark}${sq(mv.to.x, mv.to.y)}${promo}${suffix}`;
+}
+
+
+// ============================================================================
+// UI Button Attachments
+// ============================================================================
+
+function attachUIButtons() {
+	// Create navigation buttons container
+	const controlsPanel = document.getElementById('controls');
+	if (!controlsPanel) return;
+	
+	// Check if nav buttons already exist
+	let navContainer = document.getElementById('nav-buttons');
+	if (!navContainer) {
+		navContainer = document.createElement('div');
+		navContainer.id = 'nav-buttons';
+		navContainer.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap; width: 100%;';
+		
+		const btnUndoToStart = document.createElement('button');
+		btnUndoToStart.id = 'btn-undo-to-start';
+		btnUndoToStart.textContent = '⏮ Start';
+		btnUndoToStart.title = 'Go to start';
+		
+		const btnUndoOne = document.createElement('button');
+		btnUndoOne.id = 'btn-undo-one';
+		btnUndoOne.textContent = '◀ Undo';
+		btnUndoOne.title = 'Undo one move';
+		
+		const btnRedoOne = document.createElement('button');
+		btnRedoOne.id = 'btn-redo-one';
+		btnRedoOne.textContent = 'Redo ▶';
+		btnRedoOne.title = 'Redo one move';
+		
+		const btnRedoToEnd = document.createElement('button');
+		btnRedoToEnd.id = 'btn-redo-to-end';
+		btnRedoToEnd.textContent = 'End ⏭';
+		btnRedoToEnd.title = 'Go to end';
+		
+		navContainer.append(btnUndoToStart, btnUndoOne, btnRedoOne, btnRedoToEnd);
+		controlsPanel.appendChild(navContainer);
+		
+		// Attach event listeners
+		btnUndoToStart.addEventListener('click', undoToStart);
+		btnUndoOne.addEventListener('click', undoMove);
+		btnRedoOne.addEventListener('click', redoMove);
+		btnRedoToEnd.addEventListener('click', redoToEnd);
+	}
+	
+	// Update renderHistory to use new renderMoveList
+	window.originalRenderHistory = renderHistory;
+	window.renderHistory = renderMoveList;
+}
+
+
+
+// Update updateHud to call renderMoveList
+const originalUpdateHud = updateHud;
+updateHud = function() {
+	turnText.textContent = `Turn: ${state.turn === LIGHT ? "WHITE" : "BLACK"}`;
+	const diff = getDifficultySettings(state.aiLevel);
+	aiText.textContent = state.aiEnabled ? `AI: ${diff.name} (${state.aiColor === LIGHT ? "WHITE" : "BLACK"})` : "AI: OFF";
+	if (state.gameOver && state.winner) msgText.textContent = state.winner === "Draw" ? "Draw" : `${state.winner} wins`;
+	else msgText.textContent = state.message || "Ready";
+	capText.textContent = `Captures W:${state.captures[LIGHT]} B:${state.captures[DARK]}`;
+	if (state.lastMove) {
+		const { from, to } = state.lastMove;
+		lastMoveText.textContent = `Last: ${String.fromCharCode(97 + from.x)}${ROWS - from.y}${String.fromCharCode(97 + to.x)}${ROWS - to.y}`;
+	} else {
+		lastMoveText.textContent = "Last: --";
+	}
+	renderMoveList();
+};
+
+// Initialize navigation UI on load
+attachUIButtons();
+
+
+	function updateTrainingNotes(msg) {
+		const el = trainingNotesEl || document.getElementById("trainingNotes");
+		trainingMessage = msg ?? "--";
+		if (!el) return;
+		el.textContent = trainingMessage;
+		el.classList.remove("tn-flash");
+		void el.offsetWidth;
+		el.classList.add("tn-flash");
+	}
+
+	function clearTrainingNotes() {
+		const el = trainingNotesEl || document.getElementById("trainingNotes");
+		trainingMessage = "--";
+		if (el) el.textContent = trainingMessage;
+	}
+
+	function syncTrainingNotes() {
+		updateTrainingNotes(trainingMessage);
+	}
+	function setBoardInput(enabled) {
+		uiLayer.style.pointerEvents = enabled ? "auto" : "none";
+	}
+
+	function resize() {
+		const rect = container.getBoundingClientRect();
+		layout.width = rect.width;
+		layout.height = rect.height;
+		[boardLayer, piecesLayer, uiLayer].forEach(c => {
+			c.width = layout.width * dpr;
+			c.height = layout.height * dpr;
+			c.style.width = `${layout.width}px`;
+			c.style.height = `${layout.height}px`;
+			const ctx = c.getContext("2d");
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		});
+
+		const boardSize = Math.min(layout.width, layout.height) * 0.94;
+		layout.cell = boardSize / Math.max(COLS, ROWS);
+		layout.offsetX = (layout.width - layout.cell * COLS) / 2;
+		layout.offsetY = (layout.height - layout.cell * ROWS) / 2;
+		maybeRunAI();
+	}
+	function drawBoard(ctx) {
+		ctx.clearRect(0, 0, layout.width, layout.height);
+		const boardW = layout.cell * COLS;
+		const boardH = layout.cell * ROWS;
+
+		ctx.fillStyle = "#0f1117"; // Set background color for the board
+		ctx.fillRect(0, 0, layout.width, layout.height);
+		ctx.fillStyle = "#1b1f29";
+		ctx.fillRect(layout.offsetX - 6, layout.offsetY - 6, boardW + 12, boardH + 12);
+
+		const light = "#2f303a";
+		const dark = "#454552";
+		for (let y = 0; y < ROWS; y++) {
+			for (let x = 0; x < COLS; x++) {
+				const even = (x + y) % 2 === 0;
+				ctx.fillStyle = even ? light : dark;
+				ctx.fillRect(layout.offsetX + x * layout.cell, layout.offsetY + y * layout.cell, layout.cell, layout.cell);
+			}
+		}
+
+		ctx.strokeStyle = "#2f3340";
+		ctx.lineWidth = 4;
+		ctx.strokeRect(layout.offsetX - 2, layout.offsetY - 2, boardW + 4, boardH + 4);
+
+		// (Removed last move arrow)
+	}
+
+	// Draw an arrow from one square to another
+	function drawArrow(ctx, from, to, color = "#6ec1ff", width = 5, head = 16) {
+		const fx = layout.offsetX + (from.x + 0.5) * layout.cell;
+		const fy = layout.offsetY + (from.y + 0.5) * layout.cell;
+		const tx = layout.offsetX + (to.x + 0.5) * layout.cell;
+		const ty = layout.offsetY + (to.y + 0.5) * layout.cell;
+		const dx = tx - fx, dy = ty - fy;
+		const len = Math.sqrt(dx * dx + dy * dy);
+		if (len < 10) return;
+		const nx = dx / len, ny = dy / len;
+		const arrowHead = head;
+		const arrowWidth = width;
+		ctx.save();
+		ctx.strokeStyle = color;
+		ctx.lineWidth = arrowWidth;
+		ctx.lineCap = "round";
+		ctx.beginPath();
+		ctx.moveTo(fx, fy);
+		ctx.lineTo(tx - nx * arrowHead, ty - ny * arrowHead);
+		ctx.stroke();
+		// Arrowhead
+		ctx.beginPath();
+		ctx.moveTo(tx - nx * arrowHead, ty - ny * arrowHead);
+		ctx.lineTo(tx - ny * arrowHead * 0.4 - nx * arrowHead * 0.3, ty + nx * arrowHead * 0.4 - ny * arrowHead * 0.3);
+		ctx.lineTo(tx, ty);
+		ctx.lineTo(tx + ny * arrowHead * 0.4 - nx * arrowHead * 0.3, ty - nx * arrowHead * 0.4 - ny * arrowHead * 0.3);
+		ctx.lineTo(tx - nx * arrowHead, ty - ny * arrowHead);
+		ctx.fillStyle = color;
+		ctx.fill();
+		ctx.restore();
+	}
+
+	function drawPieces(ctx) {
+		ctx.clearRect(0, 0, layout.width, layout.height);
+		ctx.font = `${layout.cell * 0.58}px "Segoe UI Symbol"`;
+		ctx.textAlign = "center";
+		ctx.textBaseline = "middle";
+		for (let y = 0; y < ROWS; y++) {
+			for (let x = 0; x < COLS; x++) {
+				const piece = state.board[y][x];
+				if (!piece) continue;
+				const cx = layout.offsetX + x * layout.cell + layout.cell / 2;
+				const cy = layout.offsetY + y * layout.cell + layout.cell / 2;
+				ctx.fillStyle = piece.color === LIGHT ? "#f5f5f5" : "#0c0c0f";
+				if (GLYPHS[piece.type] && GLYPHS[piece.type][piece.color]) {
+					ctx.fillText(GLYPHS[piece.type][piece.color], cx, cy + layout.cell * 0.02);
+				}
+			}
+		}
+
+		const ui = uiLayer.getContext("2d");
+		ui.clearRect(0, 0, layout.width, layout.height);
+
+		// Highlight hint move (arrow)
+		if (hintMove) {
+			drawArrow(ui, hintMove.from, hintMove.to, "#ffd166", 6, 18);
+			drawCellFill(ui, hintMove.from.x, hintMove.from.y, "rgba(255, 209, 102, 0.32)");
+			drawCellFill(ui, hintMove.to.x, hintMove.to.y, "rgba(110, 193, 255, 0.30)");
+		}
+
+		// Highlight selected piece and legal moves
+		if (state.selected) {
+			drawCellOutline(ui, state.selected.x, state.selected.y, "#6ec1ff", 3);
+			state.legal.forEach(m => {
+				drawCellFill(ui, m.to.x, m.to.y, "rgba(255, 255, 0, 0.18)");
+				drawCellOutline(ui, m.to.x, m.to.y, "#ffd166", 2);
+			});
+		}
+
+		// Highlight last move squares if within 3 seconds
+		if (state.lastMove && lastMoveArrowTimestamp && Date.now() - lastMoveArrowTimestamp < 3000) {
+			drawCellOutline(ui, state.lastMove.from.x, state.lastMove.from.y, "#64b5f6", 2);
+			drawCellOutline(ui, state.lastMove.to.x, state.lastMove.to.y, "#64b5f6", 2);
+		}
+
+		drawCursor(ui);
+		drawUI(ui);
+	}
+
+	function drawCellFill(ctx, x, y, fill) {
+		ctx.fillStyle = fill;
+		ctx.fillRect(Math.round(layout.offsetX + x * layout.cell + 2), Math.round(layout.offsetY + y * layout.cell + 2), Math.round(layout.cell - 4), Math.round(layout.cell - 4));
+	}
+
+	function drawCellOutline(ctx, x, y, color, w) {
+		ctx.strokeStyle = color;
+		ctx.lineWidth = w;
+		ctx.strokeRect(Math.round(layout.offsetX + x * layout.cell + 2) + 0.5, Math.round(layout.offsetY + y * layout.cell + 2) + 0.5, Math.round(layout.cell - 4), Math.round(layout.cell - 4));
+	}
+
+	function drawCursor(ctx) {
+		const { x, y } = state.cursor;
+		drawCellOutline(ctx, x, y, "#6ec1ff", 2);
+	}
+
+	function drawUI(ctx) {
+		if (state.gameOver) {
+			ctx.fillStyle = "rgba(0,0,0,0.7)";
+			ctx.fillRect(14, 14, 240, 46);
+			ctx.fillStyle = "#fff";
+			ctx.font = "16px system-ui, sans-serif";
+			ctx.fillText(`Result: ${state.winner || "Draw"}`, 24, 42);
+		}
+	}
+
+	function getPieceSprite(type, color, size) {
+		const key = `${type}-${color}-${Math.round(size)}-${dpr}`;
+		if (pieceCache.has(key)) return pieceCache.get(key);
+		const canvas = document.createElement("canvas");
+		const dim = Math.ceil(size);
+		canvas.width = dim * dpr;
+		canvas.height = dim * dpr;
+		const c = canvas.getContext("2d");
+		c.setTransform(dpr, 0, 0, dpr, 0, 0);
+		c.textAlign = "center";
+		c.textBaseline = "middle";
+		c.font = `700 ${size * 0.9}px "Segoe UI Symbol", "Noto Sans Symbols", serif`;
+		c.fillStyle = color === LIGHT ? "#f5f5f5" : "#0c0c0f";
+		const g = GLYPHS[type][color];
+		c.fillText(g, dim / 2, dim / 2 + size * 0.02);
+		pieceCache.set(key, canvas);
+		return canvas;
+	}
+
+	function clickCell(x, y) {
+		if (state.menuActive) return;
+		const piece = state.board[y][x];
+		if (state.selected) {
+			const mv = state.legal.find(m => m.to.x === x && m.to.y === y);
+			if (mv) {
+				makeMove(mv);
+				state.selected = null;
+				state.legal = [];
+				return;
+			}
+		}
+		if (piece && piece.color === state.turn) {
+			state.selected = { x, y };
+			state.legal = genLegalMovesForSquare(x, y);
+			state.cursor = { x, y };
+			state.message = "";
+		} else {
+			state.selected = null;
+			state.legal = [];
+		}
+		updateHud();
+		render();
+	}
+
+
+	function moveCursor(dx, dy) {
+		if (state.menuActive) return;
+		state.cursor.x = Math.max(0, Math.min(COLS - 1, state.cursor.x + dx));
+		state.cursor.y = Math.max(0, Math.min(ROWS - 1, state.cursor.y + dy));
+		state.message = "";
+		render();
+		updateHud();
+	}
+
+
+	function maybeRunAI() {
+		if (!state.aiEnabled) return;
+		if (state.menuActive) return;
+		if (state.gameOver) return;
+		if (state.turn !== state.aiColor) return;
+		if (state.thinking) return;
+		state.thinking = true;
+		const { thinkTimeMs } = getDifficultySettings(state.aiLevel);
+		setTimeout(() => {
+			const mv = aiChooseMove();
+			if (mv) {
+				makeMove(mv);
+				syncTrainingNotes();
+			} else {
+				syncTrainingNotes();
+			}
+			state.thinking = false;
+		}, thinkTimeMs);
+	}
+
+	function renderHistory() {
+		const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
+		moveList.innerHTML = state.moveHistory.map((mv, i) => {
+			if (mv.castle === "kingside") return `<div class="move-line">${i + 1}. O-O${mv.mate ? "#" : mv.check ? "+" : ""}</div>`;
+			if (mv.castle === "queenside") return `<div class="move-line">${i + 1}. O-O-O${mv.mate ? "#" : mv.check ? "+" : ""}</div>`;
+			const captureMark = mv.captured ? "x" : "";
+			const promo = mv.promoted ? "=Q" : "";
+			const suffix = mv.mate ? "#" : mv.check ? "+" : "";
+			const piecePart = mv.piece.type === "P" ? (captureMark ? String.fromCharCode(97 + mv.from.x) : "") : mv.piece.type;
+			return `<div class="move-line">${i + 1}. ${piecePart}${captureMark}${sq(mv.to.x, mv.to.y)}${promo}${suffix}</div>`;
+		}).join("");
+	}
+
+	function toggleHistory(force) {
+		const show = force !== undefined ? force : !historyPanel.classList.contains("show");
+		historyPanel.classList.toggle("show", show);
+	}
+
+	function toggleRules(force) {
+		const show = force !== undefined ? force : !rulesOverlay.classList.contains("show");
+		rulesOverlay.classList.toggle("show", show);
+	}
+
+	function showStartOverlay() {
+		startOverlay.classList.add("show");
+		state.menuActive = true;
+		setBoardInput(false);
+	}
+function updateHud() {
+		turnText.textContent = `Turn: ${state.turn === LIGHT ? "WHITE" : "BLACK"}`;
+		const diff = getDifficultySettings(state.aiLevel);
+		aiText.textContent = state.aiEnabled ? `AI: ${diff.name} (${state.aiColor === LIGHT ? "WHITE" : "BLACK"})` : "AI: OFF";
+		if (state.gameOver && state.winner) msgText.textContent = state.winner === "Draw" ? "Draw" : `${state.winner} wins`;
+		else msgText.textContent = state.message || "Ready";
+		capText.textContent = `Captures W:${state.captures[LIGHT]} B:${state.captures[DARK]}`;
+		if (state.lastMove) {
+			const { from, to } = state.lastMove;
+			lastMoveText.textContent = `Last: ${String.fromCharCode(97 + from.x)}${ROWS - from.y}${String.fromCharCode(97 + to.x)}${ROWS - to.y}`;
+		} else {
+			lastMoveText.textContent = "Last: --";
+		}
+		renderHistory();
+	}
+
+	function start1P() {
+		state.aiEnabled = true;
+		state.aiColor = DARK;
+		state.menuActive = false;
+		setBoardInput(true);
+		startOverlay.classList.remove("show");
+		resetBoard();
+		applyDifficultyUI();
+		render();
+		updateHud();
+		maybeRunAI();
+	}
+
+	function start2P() {
+		state.aiEnabled = false;
+		state.menuActive = false;
+		setBoardInput(true);
+		startOverlay.classList.remove("show");
+		resetBoard();
+		applyDifficultyUI();
+		render();
+		updateHud();
+	}
+
+	function startSelected() {
+		setDifficulty(selectedDiff);
+		if (selectedMode === "1p") start1P(); else start2P();
+	}
+
+	function setDifficulty(level) {
+		state.aiLevel = Math.min(15, Math.max(1, Math.round(level)));
+		selectedDiff = state.aiLevel;
+		currentDifficulty = getDifficultySettings(state.aiLevel);
+		mobileExpandedLevel = state.aiLevel;
+		applyDifficultyUI();
+		updateHud();
+	}
+
+	function applyModeUI() {
+		[btn1p, btn2p].forEach(b => b.classList.remove("active"));
+		if (selectedMode === "1p") btn1p.classList.add("active"); else btn2p.classList.add("active");
+	}
+
+	function applyDifficultyUI() {
+		if (diffSelect) diffSelect.value = String(state.aiLevel);
+		selectedDiff = state.aiLevel;
+		updateMobileDifficultyUI();
+	}
+
+	function cycleDiff(delta) {
+		const next = selectedDiff + delta;
+		selectedDiff = next < 1 ? 15 : next > 15 ? 1 : next;
+		state.aiLevel = selectedDiff;
+		currentDifficulty = getDifficultySettings(state.aiLevel);
+		applyDifficultyUI();
+	}
+
+	function renderMobileDifficulty() {
+		if (!difficultyMobile) return;
+		const frag = document.createDocumentFragment();
+		for (let lvl = 1; lvl <= 15; lvl++) {
+			const info = getDifficultySettings(lvl);
+			const item = document.createElement("div");
+			item.className = "diff-mobile-item";
+			item.dataset.level = String(lvl);
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "diff-mobile-btn";
+			btn.innerHTML = `<span>${lvl}. ${info.name}</span><span class="range">${info.mobile?.range || ""}</span>`;
+			btn.addEventListener("click", () => {
+				const expandTo = mobileExpandedLevel === lvl ? null : lvl;
+				setDifficulty(lvl);
+				mobileExpandedLevel = expandTo;
+				updateMobileDifficultyUI();
+			});
+			const detail = document.createElement("div");
+			detail.className = "diff-mobile-detail";
+			const range = info.mobile?.range || "";
+			const desc = info.mobile?.desc || "";
+			detail.innerHTML = `<div class="elo">${range}</div><p>${desc}</p>`;
+			item.append(btn, detail);
+			frag.appendChild(item);
+		}
+		difficultyMobile.innerHTML = "";
+		difficultyMobile.appendChild(frag);
+		updateMobileDifficultyUI();
+	}
+
+	function updateMobileDifficultyUI() {
+		if (!difficultyMobile) return;
+		const items = difficultyMobile.querySelectorAll(".diff-mobile-item");
+		items.forEach(item => {
+			const lvl = Number(item.dataset.level);
+			const isSelected = state.aiLevel === lvl;
+			const isExpanded = mobileExpandedLevel === lvl;
+			item.classList.toggle("selected", isSelected);
+			item.classList.toggle("expanded", isExpanded);
+			const detail = item.querySelector(".diff-mobile-detail");
+			if (detail) detail.style.maxHeight = isExpanded ? `${detail.scrollHeight}px` : "0px";
+		});
+	}
+
+	function handlePointer(e) {
+		if (state.menuActive) return;
+		const rect = uiLayer.getBoundingClientRect();
+		const mx = e.clientX - rect.left;
+		const my = e.clientY - rect.top;
+		const x = Math.floor((mx - layout.offsetX) / layout.cell);
+		const y = Math.floor((my - layout.offsetY) / layout.cell);
+		if (!onBoard(x, y)) return;
+		state.cursor = { x, y };
+		clickCell(x, y);
+	}
+
+	function handleKey(e) {
+		// Do not intercept keys when typing into inputs/textareas/contenteditable elements
+		const active = document.activeElement;
+		if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
+		const key = e.key.toLowerCase();
+		if (rulesOverlay.classList.contains("show")) {
+			if (["h","escape","enter"," "].includes(key)) toggleRules(false);
+			return;
+		}
+		if (state.menuActive) {
+			if (key === "1") { selectedMode = "1p"; applyModeUI(); }
+			else if (key === "2") { selectedMode = "2p"; applyModeUI(); }
+			else if (key === "arrowup" || key === "w") { cycleDiff(-1); }
+			else if (key === "arrowdown" || key === "s") { cycleDiff(1); }
+			else if (key === "enter" || key === " ") { startSelected(); }
+			return;
+		}
+		if (key === "arrowup" || key === "w") moveCursor(0, -1);
+		else if (key === "arrowdown" || key === "s") moveCursor(0, 1);
+		else if (key === "arrowleft" || key === "a") moveCursor(-1, 0);
+		else if (key === "arrowright" || key === "d") moveCursor(1, 0);
+		else if (key === "enter" || key === " ") { clickCell(state.cursor.x, state.cursor.y); }
+		else if (key === "escape") { state.selected = null; state.legal = []; state.message = ""; render(); updateHud(); return; }
+		else if (key === "u") { undo(); }
+		else if (key === "r") { resetBoard(); render(); updateHud(); }
+		else if (key === "h") { toggleRules(); }
+		render();
+		updateHud();
+	}
+
+	function requestHintDepth2() {
+		requestHint(2);
+	}
+
+	function requestHintDepth4() {
+		requestHint(4);
+	}
+	function setHintToggle(hint1Active) {
+		if (!btnHint || !btnHint2) return;
+		if (hint1Active === null || hint1Active === undefined) {
+			btnHint.classList.remove("active-hint");
+			btnHint2.classList.remove("active-hint");
+			return;
+		}
+		btnHint.classList.toggle("active-hint", hint1Active);
+		btnHint2.classList.toggle("active-hint", hint1Active === false);
+	}
+
+	function requestHint(depth) {
+		// Always reset all hint state before computing
+		clearHintHighlight();
+		clearHintCache();
+		resetHintRequestState();
+		clearTrainingNotes();
+		hintVisible = false;
+		render();
+		const ctxSnap = cloneCtx(state.board, state.castling, state.enPassant);
+		const turnColor = state.turn;
+		const mv = depth === 2 ? computeHint2(ctxSnap, turnColor) : computeHint4(ctxSnap, turnColor);
+		hintMove = mv;
+		hintVisible = !!mv;
+		hintBusy = false;
+		hintTimer = null;
+		if (mv) {
+			const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+			const sim = simulateMove(mv, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+			const evalAfter = evaluateBoard(sim.board, turnColor);
+			const note = explainMove(mv, evalBefore, evalAfter);
+			updateTrainingNotes(note);
+		}
+		render();
+	}
+
+	function computeHint2(ctxSnapshot, color) { // depth 2 fixed
+		return computeHintFixedDepth(ctxSnapshot, color, 2);
+	}
+
+	function computeHint4(ctxSnapshot, color) { // depth 4 fixed
+		return computeHintFixedDepth(ctxSnapshot, color, 4);
+	}
+
+	function computeHintFixedDepth(ctxSnapshot, color, depth) {
+		const legal = generateLegalMovesFor(ctxSnapshot.board, ctxSnapshot.castling, ctxSnapshot.enPassant, color);
+		if (!legal.length) return null;
+		const deadline = Infinity; // ensure full fixed-depth search; no iterative deepening
+		const res = searchBestMove(ctxSnapshot, depth, -Infinity, Infinity, color, color, deadline, 0);
+		return res?.move || null;
+	}
+
+	function render() {
+		drawBoard(boardLayer.getContext("2d"));
+		drawPieces(piecesLayer.getContext("2d"));
+	}
+
+	function clearHint() {
+		hintMove = null;
+		hintBusy = false;
+		if (hintTimer) { clearTimeout(hintTimer); hintTimer = null; }
+		setHintToggle(null);
+	}
+
+	function clearHintHighlight() {
+		hintMove = null;
+		hintVisible = false;
+		// Remove any visual hint artifacts immediately
+		setHintToggle(null);
+		render();
+	}
+
+	function clearHintCache() {
+		// Reset all caches used by hint searches to avoid stale data.
+		if (TT?.clear) TT.clear();
+		if (Array.isArray(PAWN_TT)) PAWN_TT.fill(null);
+		if (Array.isArray(EVAL_TT)) EVAL_TT.fill(null);
+	}
+
+
+	function resetHintRequestState() {
+		if (hintTimer) { clearTimeout(hintTimer); hintTimer = null; }
+		hintBusy = false;
+		hintMove = null;
+		hintRequestToken += 1;
+	}
+
+	resetBoard();
+	resize();
+	applyDifficultyUI();
+	applyModeUI();
+	renderMobileDifficulty();
+	setBoardInput(false);
+	render();
+	updateHud();
+
+	uiLayer.addEventListener("mousedown", handlePointer);
+	window.addEventListener("resize", () => { resize(); render(); });
+	window.addEventListener("keydown", handleKey);
+	btn1p.addEventListener("click", () => { selectedMode = "1p"; applyModeUI(); });
+	btn2p.addEventListener("click", () => { selectedMode = "2p"; applyModeUI(); });
+	if (diffSelect) diffSelect.addEventListener("change", () => setDifficulty(Number(diffSelect.value)));
+	btnStartOverlay.addEventListener("click", startSelected);
+	btnRules.addEventListener("click", () => toggleRules(true));
+	closeRules.addEventListener("click", () => toggleRules(false));
+	hudBtnStart.addEventListener("click", showStartOverlay);
+	hudBtnReset.addEventListener("click", () => { resetBoard(); render(); updateHud(); });
+	btnHint.addEventListener("click", () => { setHintToggle(true); requestHintDepth2(); });
+	btnHint2.addEventListener("click", () => { setHintToggle(false); requestHintDepth4(); });
+	hudBtnHistory.addEventListener("click", () => toggleHistory());
+	btnHistoryClose.addEventListener("click", () => toggleHistory(false));
+
+
+// ============================================================================
+// Score Formatting
+// ============================================================================
+
+function formatScore(score) {
+	if (!Number.isFinite(score)) return "0.00";
+
+	// Check for mate scores
+	const MATE_THRESHOLD = 9000;
+	if (score > MATE_THRESHOLD) {
+		const movesToMate = Math.ceil((10000 - score) / 2);
+		return `#${movesToMate}`;
+	}
+	if (score < -MATE_THRESHOLD) {
+		const movesToMate = Math.ceil((10000 + score) / 2);
+		return `#-${movesToMate}`;
+	}
+
+	// Regular centipawn score (score is in pawns, convert to +/- format)
+	const centipawns = Math.round(score * 100);
+	const sign = centipawns >= 0 ? "+" : "";
+	return `${sign}${(centipawns / 100).toFixed(2)}`;
+}
+
+
+// ============================================================================
+// PV Line Formatting
+// ============================================================================
+
+function formatPVLine(pvMoves) {
+	if (!pvMoves || pvMoves.length === 0) return "—";
+
+	const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
+	const formatted = [];
+
+	for (let i = 0; i < Math.min(pvMoves.length, 8); i++) {
+		const mv = pvMoves[i];
+		
+		if (mv.castle === "kingside") {
+			formatted.push("O-O");
+		} else if (mv.castle === "queenside") {
+			formatted.push("O-O-O");
+		} else {
+			const piece = mv.piece?.type || "?";
+			const capture = mv.captured || mv.enPassant ? "x" : "";
+			const promo = mv.promo ? `=${mv.promo}` : "";
+			const piecePart = piece === "P" ? (capture ? String.fromCharCode(97 + mv.from.x) : "") : piece;
+			formatted.push(`${piecePart}${capture}${sq(mv.to.x, mv.to.y)}${promo}`);
+		}
+	}
+
+	return formatted.join(" ");
+}
+// ============================================================================
+// UI: Multi-PV Panel
+// ============================================================================
+
+function createMultiPVPanel() {
+	const existingPanel = document.getElementById('multipv-panel');
+	if (existingPanel) return existingPanel;
+
+	const panel = document.createElement('div');
+	panel.id = 'multipv-panel';
+	panel.className = 'panel';
+	panel.style.display = 'none'; // Hidden by default
+	panel.innerHTML = `
+		<h4>Analysis Lines</h4>
+		<div id="multipv-lines" style="font-family: monospace; font-size: 12px; line-height: 1.6;"></div>
+	`;
+
+	// Insert after training panel
+	const trainingPanel = document.getElementById('training-panel');
+	if (trainingPanel && trainingPanel.parentNode) {
+		trainingPanel.parentNode.insertBefore(panel, trainingPanel.nextSibling);
+	}
+
+	return panel;
+}
+
+function renderMultiPVLines(pvResults) {
+	const panel = document.getElementById('multipv-panel');
+	const linesContainer = document.getElementById('multipv-lines');
+	
+	if (!panel || !linesContainer) return;
+
+	if (!pvResults || pvResults.length === 0 || multiPVConfig.lines <= 1) {
+		panel.style.display = 'none';
+		return;
+	}
+
+	panel.style.display = 'block';
+
+	let html = '';
+	for (let i = 0; i < pvResults.length; i++) {
+		const result = pvResults[i];
+		const isMain = i === 0;
+		const lineNum = i + 1;
+
+		const bgColor = isMain ? 'rgba(110, 193, 255, 0.08)' : 'transparent';
+		const borderLeft = isMain ? '3px solid var(--accent)' : '3px solid transparent';
+		
+		html += `
+			<div style="
+				margin-bottom: 8px;
+				padding: 6px 8px;
+				background: ${bgColor};
+				border-left: ${borderLeft};
+				border-radius: 6px;
+				transition: background 0.2s;
+			" 
+			onmouseover="this.style.background='rgba(110, 193, 255, 0.12)'"
+			onmouseout="this.style.background='${bgColor}'">
+				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+					<span style="color: ${isMain ? 'var(--accent)' : 'var(--muted)'}; font-weight: ${isMain ? '700' : '400'};">
+						${lineNum}.
+					</span>
+					<span style="
+						color: ${result.score > 0 ? '#81c784' : result.score < 0 ? '#e57373' : 'var(--text)'};
+						font-weight: 700;
+						font-size: 13px;
+					">
+						${formatScore(result.score)}
+					</span>
+				</div>
+				<div style="color: var(--muted); font-size: 11px; overflow-x: auto; white-space: nowrap;">
+					${formatPVLine(result.pv)}
+				</div>
+			</div>
+		`;
+	}
+
+	linesContainer.innerHTML = html;
+}
+
+// ============================================================================
+// UI: Multi-PV Settings Control
+// ============================================================================
+
+function createMultiPVControl() {
+	const controls = document.getElementById('controls');
+	if (!controls) return;
+
+	const existingControl = document.getElementById('multipv-control');
+	if (existingControl) return;
+
+	const controlDiv = document.createElement('div');
+	controlDiv.id = 'multipv-control';
+	controlDiv.style.cssText = 'display: flex; gap: 4px; width: 100%; margin-top: 8px;';
+
+	const label = document.createElement('span');
+	label.textContent = 'Lines:';
+	label.style.cssText = 'color: var(--muted); font-size: 12px; align-self: center; margin-right: 4px;';
+
+	const options = [
+		{ value: 1, label: '1' },
+		{ value: 2, label: '2' },
+		{ value: 3, label: '3' },
+		{ value: 5, label: '5' }
+	];
+
+	const buttons = [];
+	for (const opt of options) {
+		const btn = document.createElement('button');
+		btn.textContent = opt.label;
+		btn.dataset.lines = opt.value;
+		btn.style.cssText = 'flex: 1; padding: 6px; font-size: 12px;';
+		
+		if (opt.value === multiPVConfig.lines) {
+			btn.classList.add('active');
+			btn.style.background = 'linear-gradient(135deg, #6ec1ff, #3f7cff)';
+			btn.style.color = '#0b0d13';
+		}
+
+		btn.addEventListener('click', () => {
+			const lines = parseInt(btn.dataset.lines, 10);
+			setMultiPVLines(lines);
+			
+			// Update button states
+			buttons.forEach(b => {
+				b.classList.remove('active');
+				b.style.background = '';
+				b.style.color = '';
+			});
+			btn.classList.add('active');
+			btn.style.background = 'linear-gradient(135deg, #6ec1ff, #3f7cff)';
+			btn.style.color = '#0b0d13';
+// Force hide panel immediately if single-PV
+	if (lines <= 1) {
+		const panel = document.getElementById('multipv-panel');
+		if (panel) panel.style.display = 'none';
+	}
+
+
+		});
+
+		buttons.push(btn);
+		controlDiv.appendChild(btn);
+	}
+
+	controls.appendChild(label);
+	controls.appendChild(controlDiv);
+}
+
+function setMultiPVLines(lines) {
+	multiPVConfig.lines = lines;
+	multiPVConfig.enabled = lines > 1;
+	
+	if (lines <= 1) {
+		// Clear Multi-PV state when switching to single-PV
+		multiPVConfig.currentResults = [];
+		const panel = document.getElementById('multipv-panel');
+		if (panel) {
+			panel.style.display = 'none';
+		}
+		const linesContainer = document.getElementById('multipv-lines');
+		if (linesContainer) {
+			linesContainer.innerHTML = '';
+		}
+	}
+}
+
+// ============================================================================
+// Integration: Update AI Move Selection
+// ============================================================================
+
+// Store original aiChooseMove
+const originalAiChooseMove = aiChooseMove;
+
+// Override aiChooseMove to support Multi-PV
+aiChooseMove = function() {
+	const legal = generateLegalMoves(state.aiColor);
+	if (!legal.length) return null;
+	
+	const settings = getDifficultySettings(state.aiLevel);
+	currentDifficulty = settings;
+	CONTEMPT = settings.contempt !== undefined ? settings.contempt : 20;
+	
+	if (settings.moveNoise && Math.random() < settings.moveNoise) {
+		return legal[Math.floor(Math.random() * legal.length)];
+	}
+
+	const book = pickBookMove(legal, settings.openingBookStrength);
+	if (book) return book;
+
+	seePruneMain = 0;
+	seePruneQ = 0;
+	searchAge += 1;
+
+	const ctx = cloneCtx(state.board, state.castling, state.enPassant);
+	const maxDepth = settings.searchDepth;
+	const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
+
+	// Use Multi-PV search if enabled
+	if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
+		const pvResults = searchMultiPV(
+			ctx,
+			maxDepth,
+			state.aiColor,
+			state.aiColor,
+			deadline,
+			multiPVConfig.lines
+		);
+
+		// Store results for display
+		multiPVConfig.currentResults = pvResults;
+		renderMultiPVLines(pvResults);
+
+		// Choose best move from first line
+		let choice = pvResults[0]?.move || legal[Math.floor(Math.random() * legal.length)];
+
+		// Apply blunder chance
+		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
+			const others = legal.filter(mv => mv !== choice);
+			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
+		}
+
+		return choice;
+	} else {
+		// Single-PV mode (original behavior)
+		let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
+		let prevScore = 0;
+
+		for (let d = 1; d <= maxDepth; d++) {
+			let window = 40;
+			let alpha = -Infinity;
+			let beta = Infinity;
+			let failCount = 0;
+
+			if (d > 1 && Number.isFinite(prevScore)) {
+				alpha = prevScore - window;
+				beta = prevScore + window;
+			}
+
+			let res;
+			while (true) {
+				res = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
+				if (Date.now() > deadline || res.cut) break;
+
+				if (res.score <= alpha) {
+					failCount++;
+					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200);
+					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
+					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
+					continue;
+				}
+
+				if (res.score >= beta) {
+					failCount++;
+					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200);
+					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
+					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
+					continue;
+				}
+
+				break;
+			}
+
+			if (res.move) {
+				best = res;
+				prevScore = res.score;
+			}
+			if (Date.now() > deadline || res.cut) break;
+		}
+
+		// Clear Multi-PV display in single-PV mode
+		multiPVConfig.currentResults = [];
+		renderMultiPVLines([]);
+
+		let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
+
+		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
+			const others = legal.filter(mv => mv !== choice);
+			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
+		}
+
+		return choice;
+	}
+};
+
+// ============================================================================
+// Hint System Integration with Multi-PV
+// ============================================================================
+
+// Update hint functions to show Multi-PV analysis
+const originalRequestHint = requestHint;
+
+requestHint = function(depth) {
+	clearHintHighlight();
+	clearHintCache();
+	resetHintRequestState();
+	clearTrainingNotes();
+	hintVisible = false;
+	render();
+
+	const ctxSnap = cloneCtx(state.board, state.castling, state.enPassant);
+	const turnColor = state.turn;
+
+	// If Multi-PV is enabled, show multiple lines
+	if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
+		const pvResults = searchMultiPV(
+			ctxSnap,
+			depth,
+			turnColor,
+			turnColor,
+			Infinity,
+			multiPVConfig.lines
+		);
+
+		multiPVConfig.currentResults = pvResults;
+		renderMultiPVLines(pvResults);
+
+		// Highlight best move
+		const bestMove = pvResults[0]?.move;
+		if (bestMove) {
+			hintMove = bestMove;
+			hintVisible = true;
+
+			const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+			const sim = simulateMove(bestMove, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+			const evalAfter = evaluateBoard(sim.board, turnColor);
+			const note = explainMove(bestMove, evalBefore, evalAfter);
+			updateTrainingNotes(note);
+		}
+	} else {
+		// Single-PV hint (original behavior)
+		const mv = depth === 2 ? computeHint2(ctxSnap, turnColor) : computeHint4(ctxSnap, turnColor);
+		hintMove = mv;
+		hintVisible = !!mv;
+
+		if (mv) {
+			const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+			const sim = simulateMove(mv, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+			const evalAfter = evaluateBoard(sim.board, turnColor);
+			const note = explainMove(mv, evalBefore, evalAfter);
+			updateTrainingNotes(note);
+		}
+	}
+
+	hintBusy = false;
+	hintTimer = null;
+	render();
+};
+
+// ============================================================================
+// Initialize Multi-PV UI
+// ============================================================================
+
+function initializeMultiPV() {
+	createMultiPVPanel();
+	createMultiPVControl();
+}
+
+// Call initialization after DOM is ready
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', initializeMultiPV);
+} else {
+	initializeMultiPV();
+}
+
+// ============================================================================
+// Export Multi-PV API (for external access if needed)
+// ============================================================================
+
+window.multiPV = {
+	setLines: setMultiPVLines,
+	getConfig: () => ({ ...multiPVConfig }),
+	getCurrentResults: () => multiPVConfig.currentResults,
+	formatScore: formatScore,
+	formatPVLine: formatPVLine
+};
+
+
+

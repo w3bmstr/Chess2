@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Modern Chess</title>
+	<style>
+		:root {
+			--bg: #0f0f12;
+			--panel: #14141b;
+			--panel-2: #101015;
+			--stroke: #252530;
+			--accent: #6ec1ff;
+			--accent-2: #ffd166;
+			--text: #f0f2f5;
+			--muted: #bcc1d0;
+			--pill: rgba(255,255,255,0.06);
+			--shadow: 0 18px 48px rgba(0,0,0,0.42);
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			min-height: 100vh;
+			background: radial-gradient(circle at 24% 26%, rgba(110,193,255,0.12), transparent 44%), radial-gradient(circle at 76% 72%, rgba(255,209,102,0.12), transparent 48%), var(--bg);
+			color: var(--text);
+			font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+			line-height: 1.5;
+		}
+
+		.page { max-width: 1200px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 16px; }
+		.hero { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 8px 0 12px; border-bottom: 1px solid var(--stroke); }
+		.hero h1 { margin: 2px 0; font-size: 26px; letter-spacing: 0.6px; }
+		.hero .eyebrow { margin: 0; text-transform: uppercase; letter-spacing: 1px; font-size: 12px; color: var(--muted); }
+		.hero .lede { margin: 4px 0 0 0; color: var(--muted); max-width: 760px; }
+		.meta { display: flex; flex-wrap: wrap; gap: 8px; }
+		.pill { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 999px; background: var(--pill); border: 1px solid var(--stroke); font-size: 13px; color: var(--muted); }
+
+		.layout { display: grid; grid-template-columns: minmax(0, 2fr) 1fr; gap: 16px; align-items: start; }
+		.board-shell { display: flex; flex-direction: column; gap: 12px; }
+
+		#game-container {
+			position: relative;
+			width: 100%;
+			max-width: 1100px;
+			aspect-ratio: 5 / 6;
+			min-height: 440px;
+			margin: 0 auto;
+			background: radial-gradient(circle at 32% 22%, rgba(110,193,255,0.22), transparent 52%), radial-gradient(circle at 70% 74%, rgba(255,209,102,0.16), transparent 52%), #0f1117;
+			border: 1px solid var(--stroke);
+			border-radius: 14px;
+			overflow: hidden;
+			box-shadow: var(--shadow);
+		}
+
+		canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+		.layer-board { z-index: 0; pointer-events: none; }
+		.layer-pieces { z-index: 1; pointer-events: none; }
+		.layer-ui { z-index: 2; }
+
+		.hud { display: flex; flex-direction: column; gap: 10px; }
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--stroke);
+			border-radius: 12px;
+			padding: 12px 14px;
+			min-width: 240px;
+			box-shadow: var(--shadow);
+		}
+		.panel h4 { margin: 0 0 6px 0; font-size: 13px; letter-spacing: 0.5px; color: var(--accent-2); }
+		.panel p { margin: 4px 0; font-size: 13px; }
+		.panel .subtitle { color: var(--muted); }
+
+		#controls { display: flex; gap: 8px; flex-wrap: wrap; }
+		#controls button {
+			padding: 9px 12px;
+			border: 1px solid var(--stroke);
+			border-radius: 9px;
+			background: #1a1c26;
+			color: var(--text);
+			cursor: pointer;
+			font-size: 13px;
+			transition: transform 0.1s ease, box-shadow 0.2s ease, background 0.2s ease;
+		}
+		#controls button.active-hint {
+			outline: 2px solid var(--accent-2);
+			background: linear-gradient(135deg, rgba(255,209,102,0.18), rgba(110,193,255,0.18));
+		}
+		#controls button.primary { background: linear-gradient(135deg, #6ec1ff, #3f7cff); color: #0b0d13; border-color: transparent; }
+		#controls button:disabled { opacity: 0.55; cursor: not-allowed; }
+		#controls button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,0.25); }
+
+		.history-panel { position: relative; max-height: 240px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+		.history-panel .move-line { margin: 2px 0; }
+		.history-close { position: absolute; top: 6px; right: 6px; padding: 4px 8px; border: 1px solid var(--stroke); border-radius: 6px; background: #1a1c26; color: var(--text); cursor: pointer; font-size: 11px; }
+		#btn-history { display: none; }
+
+		#start-overlay, #rules-overlay {
+			position: fixed;
+			inset: 0;
+			display: none;
+			align-items: center;
+			justify-content: center;
+			background: rgba(0,0,0,0.72);
+			backdrop-filter: blur(4px);
+			z-index: 30;
+			padding: 16px;
+			overflow-y: auto;
+		}
+		#start-overlay.show, #rules-overlay.show { display: flex; }
+
+		#start-card, #rules-card {
+			background: var(--panel-2);
+			border: 1px solid var(--stroke);
+			border-radius: 14px;
+			padding: 18px 20px;
+			color: var(--text);
+			width: min(540px, 94vw);
+			box-shadow: var(--shadow);
+		}
+		#start-card h2 { margin: 0 0 10px 0; font-size: 22px; }
+		#start-card p { margin: 0 0 12px 0; font-size: 14px; color: var(--muted); }
+		#start-card .btn-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+		#difficulty-select {
+			width: 100%;
+			padding: 11px 12px;
+			border: 1px solid var(--stroke);
+			border-radius: 10px;
+			background: #1a1c26;
+			color: var(--text);
+			font-size: 14px;
+			appearance: none;
+			box-shadow: var(--shadow);
+			background-image: linear-gradient(45deg, transparent 50%, #6ec1ff 50%), linear-gradient(135deg, #6ec1ff 50%, transparent 50%);
+			background-position: calc(100% - 22px) center, calc(100% - 16px) center;
+			background-size: 6px 6px, 6px 6px;
+			background-repeat: no-repeat;
+			cursor: pointer;
+		}
+		#difficulty-select:focus { outline: 2px solid rgba(110,193,255,0.55); outline-offset: 1px; }
+		#difficulty-select:hover { border-color: #6ec1ff; }
+		#start-card button {
+			flex: 1;
+			padding: 10px 12px;
+			border: 1px solid var(--stroke);
+			border-radius: 10px;
+			background: #1a1c26;
+			color: var(--text);
+			font-weight: 700;
+			cursor: pointer;
+		}
+		#start-card button.secondary { background: #1f2230; color: var(--text); }
+		#start-card button.active { outline: 2px solid var(--accent); }
+		#start-card .primary { background: linear-gradient(135deg, #6ec1ff, #3f7cff); color: #0b0d13; border-color: transparent; }
+		#difficulty-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 8px; }
+		#difficulty-mobile { display: none; margin-top: 10px; max-height: 420px; overflow-y: auto; }
+		.diff-mobile-item { background: #1a1c26; border: 1px solid var(--stroke); border-radius: 12px; margin-bottom: 8px; box-shadow: var(--shadow); }
+		.diff-mobile-btn { width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 12px 14px; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+		.diff-mobile-btn .range { color: var(--muted); font-size: 12px; }
+		.diff-mobile-item.selected { border-color: var(--accent); }
+		.diff-mobile-detail { overflow: hidden; max-height: 0; transition: max-height 180ms ease, padding 160ms ease; padding: 0 14px; }
+		.diff-mobile-item.expanded .diff-mobile-detail { padding: 0 14px 12px 14px; }
+		.diff-mobile-detail p { margin: 6px 0 4px 0; color: var(--muted); font-size: 13px; }
+		.diff-mobile-detail .elo { font-weight: 700; color: var(--accent-2); font-size: 13px; }
+		.diff-mobile-item:active { transform: translateY(1px); }
+
+		#rules-card h3 { margin: 0 0 8px 0; font-size: 18px; }
+		#rules-card ul { margin: 8px 0 0 18px; padding: 0; color: var(--muted); }
+		#rules-card li { margin: 4px 0; }
+		#close-rules { margin-top: 12px; padding: 9px 12px; border: 1px solid var(--stroke); border-radius: 8px; background: #1a1c26; color: #fff; cursor: pointer; }
+
+		@keyframes tn-flash {
+			0% { background: rgba(255, 209, 102, 0.15); }
+			100% { background: transparent; }
+		}
+
+		#trainingNotes.tn-flash {
+			animation: tn-flash 0.6s ease-out;
+		}
+
+		@media (max-width: 900px) {
+			.page { padding: 0 0 24px; }
+			.hero { flex-direction: column; gap: 8px; padding: 12px 12px 10px; }
+			.hero h1 { font-size: 24px; }
+			.layout { grid-template-columns: 1fr; padding: 0 12px; }
+			#game-container { width: 100%; max-width: none; aspect-ratio: 4 / 5; min-height: 360px; border-radius: 0; }
+			.hud { flex-direction: column; }
+			.panel { width: 100%; min-width: 0; }
+			#btn-history { display: inline-block; }
+			#history { display: none; }
+			#history.show { display: block; }
+		}
+
+		@media (max-width: 620px) {
+			.page { padding: 0 0 20px; }
+			.hero h1 { font-size: 22px; }
+			.pill { padding: 7px 9px; font-size: 12px; }
+			#game-container { aspect-ratio: 1 / 1; min-height: 320px; }
+			#controls button { flex: 1 1 calc(50% - 6px); text-align: center; }
+			#start-card .btn-row { flex-direction: column; }
+			#start-card button { width: 100%; }
+		}
+	</style>
+</head>
+<body>
+	<div class="page">
+		<header class="hero">
+			<div>
+				<p class="eyebrow">Classical</p>
+				<h1>Modern Chess</h1>
+				<p class="lede">Standard 8x8 chess played by FIDE rules: check, checkmate, castling, and en passant.</p>
+			</div>
+			<div class="meta">
+				<span class="pill">2P / vs AI</span>
+				<span class="pill">8x8 board</span>
+				<span class="pill">Checkmate to win</span>
+			</div>
+		</header>
+
+		<main class="layout">
+			<section class="board-shell">
+				<div id="game-container">
+					<canvas id="board-layer" class="layer-board"></canvas>
+					<canvas id="pieces-layer" class="layer-pieces"></canvas>
+					<canvas id="ui-layer" class="layer-ui"></canvas>
+
+					<div id="start-overlay" class="show">
+						<div id="start-card">
+							<h2>Modern Chess</h2>
+							<p>Choose players, set difficulty, then begin.</p>
+							<div class="btn-row">
+								<button id="btn-1p">1 Player (vs AI)</button>
+								<button id="btn-2p" class="secondary">2 Players</button>
+							</div>
+							<p style="margin-top:12px; margin-bottom:6px;">AI Difficulty</p>
+							<div class="btn-row" style="margin-top:8px;">
+								<select id="difficulty-select" style="width:100%; padding:10px; font-size:14px;">
+									<option value="1">Beginner (100–300)</option>
+									<option value="2">Casual Player (300–600)</option>
+									<option value="3">Hobbyist (600–900)</option>
+									<option value="4">Intermediate (900–1200)</option>
+									<option value="5" selected>Strong Amateur (1200–1500)</option>
+									<option value="6">Club Player (1500–1800)</option>
+									<option value="7">Advanced Club Player (1800–2000)</option>
+									<option value="8">Expert (2000–2200)</option>
+									<option value="9">Candidate Master (2200–2400)</option>
+									<option value="10">Master (2400–2600)</option>
+									<option value="11">International Master (2600–2800)</option>
+									<option value="12">Grandmaster (2800–3000)</option>
+									<option value="13">Super-GM (3000–3200)</option>
+									<option value="14">Engine-GM (3200–3400)</option>
+									<option value="15">Engine Strength (3400–3500)</option>
+								</select>
+								<div id="difficulty-mobile" aria-label="Mobile difficulty picker"></div>
+							</div>
+							<p style="margin-top:12px; margin-bottom:6px;">Start</p>
+							<div class="btn-row" style="margin-top:8px;">
+								<button id="btn-start-overlay" class="primary">Start Game</button>
+							</div>
+						</div>
+					</div>
+
+					<div id="rules-overlay">
+						<div id="rules-card">
+							<h3>Rules</h3>
+							<ul>
+								<li>8x8 board with standard chess armies (FIDE rules).</li>
+								<li>Move as usual: rook straight, bishop diagonal, queen any direction, knight in L, king one step. Pawns move 1 (or 2 from start), capture diagonally, promote to queen on last rank.</li>
+								<li>Castling, en passant, checks, checkmate, and stalemate are enforced. Kings cannot move into check.</li>
+								<li>Controls: click/tap squares; arrows/WASD + Enter/Space; U undo; R reset; H rules.</li>
+							</ul>
+							<button id="close-rules">Close</button>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<aside class="hud">
+				<div class="panel">
+					<h4>Modern Chess</h4>
+					<p class="subtitle">Classic 8x8 play with streamlined mobile-friendly controls.</p>
+				</div>
+				<div class="panel">
+					<h4>Status</h4>
+					<p id="turn-text">Turn: --</p>
+					<p id="ai-text">AI: --</p>
+					<p id="msg-text">Ready</p>
+					<p id="cap-text">Captures W:0 B:0</p>
+					<p id="lastmove-text">Last: --</p>
+				</div>
+				<div id="controls" class="panel">
+					<button id="btn-start" class="primary">New Game</button>
+					<button id="btn-reset">Reset</button>
+					<button id="btn-hint">Hint</button>
+					<button id="btn-hint-2">Hint 2</button>
+					<button id="btn-history">History</button>
+					<button id="btn-rules">Rules</button>
+				</div>
+				<div id="history" class="panel history-panel">
+					<h4>Moves</h4>
+					<button id="btn-history-close" class="history-close">Close</button>
+					<div id="move-list"></div>
+				</div>
+				<div class="panel" id="training-panel">
+					<h4>Training</h4>
+					<div id="trainingNotes">--</div>
+				</div>
+			</aside>
+		</main>
+	</div>
+
+	
+<!-- your HTML content here --> 
+ <!-- Future modular script structure for Chess2 Uncomment these as you split the engine into separate files. --> 
+<script src="board.js"></script>
+<script src="state.js"></script>
+<script src="eval.js"></script>
+<script src="moves.js"></script>
+<script src="search.js"></script>
+<script src="engine.js"></script>
+<script src="png_parser.js"></script>
+<script src="pgn_loader.js"></script>
+<script src="ui.js"></script>
+
+</body>
+</html>
