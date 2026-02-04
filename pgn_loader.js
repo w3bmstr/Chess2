@@ -35,21 +35,47 @@ let currentGameIndex = 0;
 // Render basic game info (tags) and update UI buttons
 function renderGameInfo() {
     if (typeof document === 'undefined') return;
+    const wrapperEl = document.getElementById('pgn-nav-wrapper');
     const infoEl = document.getElementById('pgn-info');
     const idxEl = document.getElementById('pgn-game-index');
     const prevBtn = document.getElementById('btn-prev-pgn');
     const nextBtn = document.getElementById('btn-next-pgn');
     if (!infoEl) return;
 
-    const game = pgnGames[currentGameIndex];
-    console.log('[PGN LOADER] renderGameInfo index:', currentGameIndex, 'total:', pgnGames.length, 'game:', game);
-    if (!game) {
-        infoEl.innerHTML = '<div style="color:var(--muted)">No game selected</div>';
+    // Hide the whole PGN navigation block until we actually have games.
+    if (!pgnGames || pgnGames.length === 0) {
+        if (wrapperEl) wrapperEl.style.display = 'none';
+        infoEl.innerHTML = '';
         if (idxEl) idxEl.textContent = '';
         if (prevBtn) prevBtn.disabled = true;
         if (nextBtn) nextBtn.disabled = true;
+        const existingSelect = document.getElementById('pgn-game-select');
+        if (existingSelect) existingSelect.remove();
+        const existingMeta = document.getElementById('pgn-metadata');
+        if (existingMeta) existingMeta.remove();
         return;
     }
+
+    if (typeof currentGameIndex !== 'number' || currentGameIndex < 0 || currentGameIndex >= pgnGames.length) {
+        currentGameIndex = 0;
+    }
+
+    const game = pgnGames[currentGameIndex];
+    console.log('[PGN LOADER] renderGameInfo index:', currentGameIndex, 'total:', pgnGames.length, 'game:', game);
+    if (!game) {
+        if (wrapperEl) wrapperEl.style.display = 'none';
+        infoEl.innerHTML = '';
+        if (idxEl) idxEl.textContent = '';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        const existingSelect = document.getElementById('pgn-game-select');
+        if (existingSelect) existingSelect.remove();
+        const existingMeta = document.getElementById('pgn-metadata');
+        if (existingMeta) existingMeta.remove();
+        return;
+    }
+
+    if (wrapperEl) wrapperEl.style.display = 'flex';
 
     const tags = game.tags || {};
     let rows = [
@@ -137,6 +163,9 @@ function renderGameInfo() {
             if (i === currentGameIndex) opt.selected = true;
             select.appendChild(opt);
         }
+        // Avoid accidental board interactions when the select is used on touch devices.
+        select.addEventListener('mousedown', (e) => { try { e.stopPropagation(); } catch (err) {} }, { passive: true });
+        select.addEventListener('touchstart', (e) => { try { e.stopPropagation(); } catch (err) {} }, { passive: true });
     } else {
         // If only one game, remove any existing select
         const existing = document.getElementById('pgn-game-select');

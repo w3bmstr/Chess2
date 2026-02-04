@@ -8087,10 +8087,26 @@ attachUIButtons();
     };
   }
 
+  function _blurActiveEditable() {
+    try {
+      const el = document.activeElement;
+      if (!el) return;
+      const tag = (el.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        el.blur();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
   function openDrawer(panelKey) {
     const { drawer, scrim } = _drawerEls();
     if (!drawer || !scrim) return;
     if (!_mobileNavState.enabled) return;
+
+    // Avoid Android keyboard popping due to stale focus.
+    _blurActiveEditable();
 
     if (panelKey) _mobileNavState.lastPanel = panelKey;
     drawer.classList.add('open');
@@ -8103,6 +8119,10 @@ attachUIButtons();
   function closeDrawer() {
     const { drawer, scrim } = _drawerEls();
     if (!drawer || !scrim) return;
+
+    // Ensure no input remains focused (prevents Android keyboard reopening).
+    _blurActiveEditable();
+
     drawer.classList.remove('open');
     scrim.classList.remove('show');
     drawer.setAttribute('aria-hidden', 'true');
@@ -8134,18 +8154,21 @@ attachUIButtons();
     openDrawer('moves');
   }
 
-  function openSearchPanel() {
+  function openSearchPanel(opts) {
     if (!_mobileNavState.enabled) return;
+    const shouldFocus = !(opts && opts.focus === false);
     openMovesPanel();
     _setActiveDrawerTab('search');
     openDrawer('search');
-    setTimeout(() => {
-      const el = document.getElementById('pgnSearch');
-      if (el) {
-        el.focus();
-        try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* ignore */ }
-      }
-    }, 0);
+    if (shouldFocus) {
+      setTimeout(() => {
+        const el = document.getElementById('pgnSearch');
+        if (el) {
+          el.focus();
+          try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* ignore */ }
+        }
+      }, 0);
+    }
   }
 
   function openEnginePanel() {
@@ -8220,7 +8243,7 @@ attachUIButtons();
       if (last === 'engine') openEnginePanel();
       else if (last === 'training') openTrainingPanel();
       else if (last === 'meta') openMetaPanel();
-      else if (last === 'search') openSearchPanel();
+      else if (last === 'search') openSearchPanel({ focus: false });
       else openMovesPanel();
     };
   }
@@ -8238,7 +8261,7 @@ attachUIButtons();
       btn.onclick = () => {
         const key = btn.getAttribute('data-panel');
         if (key === 'moves') openMovesPanel();
-        else if (key === 'search') openSearchPanel();
+        else if (key === 'search') openSearchPanel({ focus: true });
         else if (key === 'controls') openControlsPanel();
         else if (key === 'engine') openEnginePanel();
         else if (key === 'training') openTrainingPanel();

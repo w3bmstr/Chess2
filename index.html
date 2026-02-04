@@ -91,6 +91,28 @@
 		#controls button:disabled { opacity: 0.55; cursor: not-allowed; }
 		#controls button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,0.25); }
 
+		/* PGN game selector: low-contrast theme (desktop + mobile) */
+		#pgn-game-select {
+			appearance: none;
+			background: rgba(255,255,255,0.04);
+			border: 1px solid rgba(255,255,255,0.10);
+			color: var(--muted);
+			border-radius: 10px;
+			padding: 10px 12px;
+			line-height: 1.2;
+			box-shadow: none;
+			outline: none;
+		}
+		#pgn-game-select:focus {
+			border-color: rgba(110,193,255,0.40);
+			box-shadow: 0 0 0 2px rgba(110,193,255,0.18);
+		}
+		/* Best-effort: some browsers will apply this to the opened dropdown */
+		#pgn-game-select option {
+			background: var(--panel);
+			color: var(--muted);
+		}
+
 		.history-panel { position: relative; max-height: 240px; overflow-y: auto; font-family: monospace; font-size: 12px; }
 		.history-panel .move-line { margin: 2px 0; }
 		.history-close { position: absolute; top: 6px; right: 6px; padding: 4px 8px; border: 1px solid var(--stroke); border-radius: 6px; background: #1a1c26; color: var(--text); cursor: pointer; font-size: 11px; }
