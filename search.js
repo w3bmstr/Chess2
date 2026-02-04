@@ -144,6 +144,9 @@ const UPPERBOUND = 2;
 const ZOBRIST = initZobrist();
 const TT = new Map();
 let searchAge = 0;
+// Global node counter (used by UI for Engine Info). Reset at root when needed.
+// Using `var` keeps it on `window` in non-module scripts.
+var SEARCH_NODES = 0;
 const PAWN_TT_SIZE = 1 << 16;
 const PAWN_TT = Array(PAWN_TT_SIZE).fill(null);
 const EVAL_TT_SIZE = 1 << 16;
@@ -166,6 +169,32 @@ const historyHeur = [
     Array.from({ length: 64 }, () => Array(64).fill(0))
 ];
 let previousMove = null;
+
+// Pruning parameter table (pawn units). Low levels are more forgiving; high levels prune more for speed.
+const PRUNING_PARAMS = {
+	1:  { razor: 1.25, extFut: 1.90, lmpGate: 1.10, futPerDepth: 1.20 },
+	2:  { razor: 1.15, extFut: 1.80, lmpGate: 1.05, futPerDepth: 1.15 },
+	3:  { razor: 1.05, extFut: 1.70, lmpGate: 1.00, futPerDepth: 1.10 },
+	4:  { razor: 0.98, extFut: 1.60, lmpGate: 0.95, futPerDepth: 1.05 },
+	5:  { razor: 0.92, extFut: 1.50, lmpGate: 0.90, futPerDepth: 1.00 },
+	6:  { razor: 0.88, extFut: 1.42, lmpGate: 0.86, futPerDepth: 0.96 },
+	7:  { razor: 0.84, extFut: 1.35, lmpGate: 0.82, futPerDepth: 0.92 },
+	8:  { razor: 0.80, extFut: 1.28, lmpGate: 0.78, futPerDepth: 0.90 },
+	9:  { razor: 0.76, extFut: 1.22, lmpGate: 0.74, futPerDepth: 0.88 },
+	10: { razor: 0.74, extFut: 1.18, lmpGate: 0.72, futPerDepth: 0.86 },
+	11: { razor: 0.72, extFut: 1.14, lmpGate: 0.70, futPerDepth: 0.84 },
+	12: { razor: 0.70, extFut: 1.12, lmpGate: 0.68, futPerDepth: 0.82 },
+	13: { razor: 0.68, extFut: 1.10, lmpGate: 0.64, futPerDepth: 0.80 },
+	14: { razor: 0.66, extFut: 1.08, lmpGate: 0.60, futPerDepth: 0.78 },
+	15: { razor: 0.64, extFut: 1.06, lmpGate: 0.56, futPerDepth: 0.76 }
+};
+
+function getPruningParamsForCurrentDifficulty() {
+	const level = (typeof state !== 'undefined' && state && Number.isFinite(state.aiLevel))
+		? Math.min(15, Math.max(1, Math.round(state.aiLevel)))
+		: 5;
+	return PRUNING_PARAMS[level] || PRUNING_PARAMS[5];
+}
 
 const pieceCache = new Map();
 const LMR_MAX_DEPTH = 32;
@@ -395,6 +424,7 @@ function moveToAlgebraic(mv) {
 	}
 
 	function quiescence(ctx, alpha, beta, povColor, turn, deadlineMs) {
+		SEARCH_NODES++;
 		if (Date.now() > deadlineMs) return { score: evaluateBoard(ctx.board, povColor), cut: true };
 		const enemy = turn === LIGHT ? DARK : LIGHT;
 		const inChk = inCheck(turn, ctx.board);
@@ -648,6 +678,7 @@ function attackersTo(board, x, y, color) {
 	}
 
 	function searchBestMove(ctx, depth, alpha, beta, povColor, turn, deadlineMs, ply = 0) {
+		SEARCH_NODES++;
 		if (deadlineMs !== Infinity && Date.now() > deadlineMs) return { score: evaluateBoard(ctx.board, povColor), move: null, cut: true };
 		const hash = computeHash(ctx, turn);
 		const usableTT = ttProbe(hash, ply);
@@ -656,8 +687,13 @@ function attackersTo(board, x, y, color) {
 		const LMP_LIMIT = { 1: 3, 2: 6, 3: 12 };
 		const SINGULAR_MARGIN = 90; // centipawns
 		// Razoring and extended futility pruning parameters
-		const RAZOR_MARGIN = 80; // centipawns
-		const EXT_FUT_MARGIN = 120; // centipawns
+		// NOTE: evaluation scores are in pawn units (e.g. 0.80), so pruning margins must also be pawn units.
+		const pruning = getPruningParamsForCurrentDifficulty();
+		const RAZOR_MARGIN = pruning.razor;
+		const EXT_FUT_MARGIN = pruning.extFut;
+		const LMP_EVAL_GATE = pruning.lmpGate;
+		const FUTILITY_MARGIN_PER_DEPTH = pruning.futPerDepth;
+		const NULL_MOVE_R_MARGIN = 0.0; // pawns (kept at 0 to preserve behavior)
 		// TT move always used for ordering, but cutoff only if structurally safe
 		let safeForCutoff = true;
 		if (usableTT && usableTT.depth >= depth) {
@@ -691,7 +727,7 @@ if (!inChk && (DrawDetection.isDrawByRepetition() || DrawDetection.isDrawByFifty
 		}
 		if (depth === 0) return quiescence(ctx, alpha, beta, povColor, turn, deadlineMs);
 		if (!inChk) {
-			const margin = 90 * depth;
+			const margin = FUTILITY_MARGIN_PER_DEPTH * depth;
 			if (staticEval - margin >= beta) return { score: staticEval, move: null }; // reverse futility
 		}
 
@@ -714,7 +750,7 @@ if (!inChk && (DrawDetection.isDrawByRepetition() || DrawDetection.isDrawByFifty
 				const nullCtx = { board: ctx.board, castling: ctx.castling, enPassant: null };
 				const r = 2 + Math.floor(depth / 4);
 				const nullRes = searchBestMove(nullCtx, depth - 1 - r, -beta, -beta + 1, povColor, enemy, deadlineMs, ply + 1);
-				if (!nullRes.cut && nullRes.score >= beta) return { score: nullRes.score, move: null };
+				if (!nullRes.cut && nullRes.score >= beta + NULL_MOVE_R_MARGIN) return { score: nullRes.score, move: null };
 			}
 		}
 
@@ -781,7 +817,7 @@ if (allowCheckExt) {
 			// Late Move Pruning: prune late quiets at shallow depth when not in check and not TT move
 		if (!inChk && isQuiet && !isTTMove && depth <= 3) {
     const limit = LMP_LIMIT[depth];
-    if (limit !== undefined && i >= limit && staticEval + 80 <= alpha) {
+			if (limit !== undefined && i >= limit && staticEval + LMP_EVAL_GATE <= alpha) {
         continue;
     }
 }
@@ -790,7 +826,7 @@ if (allowCheckExt) {
 			// Futility pruning: DISABLE if king unsafe or fortress/endgame pattern
 			if (!isTTMove && isQuiet && !inChk && depth <= 2 && !givesCheck) {
 				if (!isFortressOrUnsafe(ctx.board, turn)) {
-					const futMargin = depth * 90;  // 90cp per depth
+					const futMargin = depth * FUTILITY_MARGIN_PER_DEPTH;
 					if (staticEval + futMargin <= alpha) {
 						continue;
 					}
@@ -967,61 +1003,53 @@ previousMove = mv;
 		const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
 		let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
 		let prevScore = 0;
+
+		// Iterative deepening with aspiration windows (scores are in pawns)
 		for (let d = 1; d <= maxDepth; d++) {
-			// Adaptive aspiration window: starts small, grows faster if repeated fails, capped at 3200 cp
-let prevScore = 0; // store score from previous iteration
+			if (Date.now() > deadline) break;
 
-for (let d = 1; d <= maxDepth; d++) {
+			let alpha = -Infinity;
+			let beta = Infinity;
+			let aspWindow = 0.50; // pawns
 
-    // Aspiration window around previous iteration's score
-    let window = 50; // 0.50 pawns
-    let alpha = prevScore - window;
-    let beta  = prevScore + window;
-
-    // First search with narrow window
-    let result = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-
-    // If fail-low or fail-high, re-search with full window
-    if (result.score <= alpha || result.score >= beta) {
-        alpha = -Infinity;
-        beta  = Infinity;
-        result = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-    }
-
-    best = result;
-    prevScore = result.score; // update for next iteration
-}
-
-
-			let failCount = 0;
 			if (d > 1 && Number.isFinite(prevScore)) {
-				alpha = prevScore - window;
-				beta = prevScore + window;
+				alpha = prevScore - aspWindow;
+				beta = prevScore + aspWindow;
 			}
-			let res;
-			while (true) {
-				res = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline);
-				if (Date.now() > deadline || res.cut) break;
-				if (res.score <= alpha) {
-					failCount++;
-					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200); // grow faster after 2 fails, cap at 3200
-					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
-					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
-					continue;
-				}
-				if (res.score >= beta) {
-					failCount++;
-					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200);
-					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
-					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
+
+			let res = null;
+			let attempts = 0;
+			while (attempts < 4) {
+				res = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
+				if (!res || res.cut || Date.now() > deadline) break;
+
+				// If aspiration failed, widen window and retry.
+				if (Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
+					attempts++;
+					aspWindow = Math.min(aspWindow * 2, 32);
+					alpha = prevScore - aspWindow;
+					beta = prevScore + aspWindow;
 					continue;
 				}
 				break;
 			}
-			if (res.move) { best = res; prevScore = res.score; }
-			if (Date.now() > deadline || res.cut) break;
+
+			// If we never got a stable score inside the window, fall back to full window once.
+			if (res && !res.cut && Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
+				res = searchBestMove(ctx, d, -Infinity, Infinity, state.aiColor, state.aiColor, deadline, 0);
+			}
+
+			if (res && res.move) {
+				best = res;
+				prevScore = res.score;
+			}
+
+			if (!res || res.cut || Date.now() > deadline) break;
 		}
-		console.debug("SEE pruning", { main: seePruneMain, qsearch: seePruneQ, depth: best.move ? maxDepth : 0 });
+
+		if (typeof window !== 'undefined' && window.DEBUG_ENGINE) {
+			console.debug("SEE pruning", { main: seePruneMain, qsearch: seePruneQ, depth: best.move ? maxDepth : 0 });
+		}
 		let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
 		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
 			const others = legal.filter(mv => mv !== choice);
@@ -1035,15 +1063,21 @@ for (let d = 1; d <= maxDepth; d++) {
 // ============================================================================
 
 function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
+	// Reset node counter for accurate reporting (UI only; safe no-op if unavailable).
+	try { if (typeof SEARCH_NODES !== 'undefined') SEARCH_NODES = 0; } catch (e) { /* ignore */ }
+	const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
 	if (numLines <= 1) {
 		// Single-PV mode: use existing search
 		const result = searchBestMove(ctx, depth, -Infinity, Infinity, povColor, turn, deadlineMs, 0);
+		const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+		const nodes = (typeof SEARCH_NODES !== 'undefined') ? SEARCH_NODES : 0;
 		return [{
 			score: result.score,
 			pv: result.move ? [result.move] : [],
 			depth: depth,
-			nodes: 0, // Not tracking nodes in current implementation
-			timeMs: 0,
+			nodes,
+			timeMs: Math.max(0, Math.round(t1 - t0)),
 			move: result.move
 		}];
 	}
@@ -1063,9 +1097,11 @@ function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 
 	const results = [];
 	const excludedMoves = [];
-	const startTime = Date.now();
+	const startTime = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 
 	for (let lineNum = 0; lineNum < Math.min(numLines, legal.length); lineNum++) {
+		const lineT0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+		const lineNodes0 = (typeof SEARCH_NODES !== 'undefined') ? SEARCH_NODES : 0;
 		// Find best move excluding previously found moves
 		let bestMove = null;
 		let bestScore = turn === povColor ? -Infinity : Infinity;
@@ -1128,14 +1164,17 @@ function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 		}
 
 		if (!bestMove) break;
+		const lineT1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+		const lineNodes1 = (typeof SEARCH_NODES !== 'undefined') ? SEARCH_NODES : lineNodes0;
+		const lineNodes = Math.max(0, lineNodes1 - lineNodes0);
 
 		// Store this line
 		results.push({
 			score: bestScore,
 			pv: bestPV,
 			depth: depth,
-			nodes: 0,
-			timeMs: Date.now() - startTime,
+			nodes: lineNodes,
+			timeMs: Math.max(0, Math.round(lineT1 - lineT0)),
 			move: bestMove
 		});
 
@@ -1159,7 +1198,7 @@ function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 		pv: [],
 		depth: depth,
 		nodes: 0,
-		timeMs: Date.now() - startTime,
+		timeMs: Math.max(0, Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startTime)),
 		move: null
 	}];
 }

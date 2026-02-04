@@ -1,0 +1,496 @@
+﻿# Missing ECO Codes and Names Report
+
+This report lists ECO codes and opening names present in the official ECO list but missing from your OPENINGS array in ui.js.
+
+## Missing ECO Codes, Names, and Moves
+
+Format: ECO  Name  Moves
+
+- A00  Uncommon Opening  1 a2a3, b2b3, d2d3, g2g4, etc.
+- A02  Bird's Opening  f2f4
+- A03  Bird's Opening  f2f4 d7d5
+- A04  Reti Opening  g1f3
+- A05  Reti Opening  g1f3 g8f6
+- A06  Reti Opening  g1f3 d7d5
+- A07  King's Indian Attack  g1f3 d7d5 g2g3
+- A08  King's Indian Attack  g1f3 d7d5 g2g3 c7c5 f1g2
+- A09  Reti Opening  g1f3 d7d5 c2c4
+- A10  English  c2c4
+- A11  English, Caro-Kann Defensive System  c2c4 c7c6
+- A12  English with b3  c2c4 c7c6 g1f3 d7d5 b2b3
+- A13  English  c2c4 e7e6
+- A14  English  c2c4 e7e6 g1f3 d7d5 g2g3 g8f6 f1g2 f8e7 e1g1
+- A15  English  c2c4 g8f6
+- A16  English  c2c4 g8f6 b1c3
+- A17  English  c2c4 g8f6 b1c3 e7e6
+- A18  English, Mikenas-Carls  c2c4 g8f6 b1c3 e7e6 e2e4
+- A19  English, Mikenas-Carls, Sicilian Variation  c2c4 g8f6 b1c3 e7e6 e2e4 c7c5
+- A20  English  c2c4 e7e5
+- A21  English  c2c4 e7e5 b1c3
+- A22  English  c2c4 e7e5 b1c3 g8f6
+- A23  English, Bremen System, Keres Variation  c2c4 e7e5 b1c3 g8f6 g2g3 c7c6
+- A24  English, Bremen System with ...g6  c2c4 e7e5 b1c3 g8f6 g2g3 g7g6
+- A25  English  c2c4 e7e5 b1c3 b8c6
+- A26  English  c2c4 e7e5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 d2d3 d7d6
+- A27  English, Three Knights System  c2c4 e7e5 b1c3 b8c6 g1f3
+- A28  English  c2c4 e7e5 b1c3 b8c6 g1f3 g8f6
+- A29  English, Four Knights, Kingside Fianchetto  c2c4 e7e5 b1c3 b8c6 g1f3 g8f6 g2g3
+- A30  English, Symmetrical  c2c4 c7c5
+- A31  English, Symmetrical, Benoni Formation  c2c4 c7c5 g1f3 g8f6 d2d4
+- A32  English, Symmetrical Variation  c2c4 c7c5 g1f3 g8f6 d2d4 c5d4 f3d4 e7e6
+- A33  English, Symmetrical  c2c4 c7c5 g1f3 g8f6 d2d4 c5d4 f3d4 e7e6 b1c3 b8c6
+- A34  English, Symmetrical  c2c4 c7c5 b1c3
+- A35  English, Symmetrical  c2c4 c7c5 b1c3 b8c6
+- A36  English  c2c4 c7c5 b1c3 b8c6 g2g3
+- A37  English, Symmetrical  c2c4 c7c5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 g1f3
+- A38  English, Symmetrical  c2c4 c7c5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 g1f3 g8f6
+- A39  English, Symmetrical, Main line with d4  c2c4 c7c5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 g1f3 g8f6 e1g1 e8g8 d2d4
+- A40  Queen's Pawn Game  d2d4
+- A41  Queen's Pawn Game (with ...d6)  d2d4 d7d6
+- A42  Modern Defense, Averbakh System  d2d4 d7d6 c2c4 g7g6 b1c3 f8g7 e2e4
+- A43  Old Benoni  d2d4 c7c5
+- A44  Old Benoni Defense  d2d4 c7c5 d4d5 e7e5
+- A45  Queen's Pawn Game  d2d4 g8f6
+- A46  Queen's Pawn Game  d2d4 g8f6 g1f3
+- A47  Queen's Indian  d2d4 g8f6 g1f3 b7b6
+- A48  King's Indian  d2d4 g8f6 g1f3 g7g6
+- A49  King's Indian, Fianchetto without c4  d2d4 g8f6 g1f3 g7g6 g2g3
+- A51  Budapest Gambit  d2d4 g8f6 c2c4 e7e5
+- A52  Budapest Gambit  d2d4 g8f6 c2c4 e7e5 d4e5 f6g4
+- A53  Old Indian  d2d4 g8f6 c2c4 d7d6
+- A54  Old Indian, Ukrainian Variation,  d2d4 g8f6 c2c4 d7d6 b1c3 e7e5 g1f3
+- A55  Old Indian, Main line  d2d4 g8f6 c2c4 d7d6 b1c3 e7e5 g1f3 b8d7 e2e4
+- A56  Benoni Defense  d2d4 g8f6 c2c4 c7c5
+- A57  Benko Gambit  d2d4 g8f6 c2c4 c7c5 d4d5 b7b5
+- A58  Benko Gambit  d2d4 g8f6 c2c4 c7c5 d4d5 b7b5 c4b5 a7a6 b5a6
+- A59  Benko Gambit  d2d4 g8f6 c2c4 c7c5 d4d5 b7b5 c4b5 a7a6 b5a6 c8a6 b1c3 d7d6 e2e4
+- A60  Benoni Defense  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6
+- A61  Benoni  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 g1f3 g7g6
+- A62  Benoni, Fianchetto Variation  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 g1f3 g7g6 g2g3 f8g7 f1g2 e8g8
+- A63  Benoni, Fianchetto,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 g1f3 g7g6 g2g3 f8g7 f1g2 e8g8
+- A64  Benoni, Fianchetto,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 g1f3 g7g6 g2g3 f8g7 f1g2 e8g8
+- A65  Benoni,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4
+- A66  Benoni  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 f2f4
+- A67  Benoni, Taimanov Variation  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 f2f4 f8g7 f1b5
+- A68  Benoni, Four Pawns Attack  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 f2f4 f8g7 g1f3 e8g8
+- A69  Benoni, Four Pawns Attack, Main line  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 f2f4 f8g7 g1f3 e8g8
+- A70  Benoni, Classical  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3
+- A71  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 c1g5
+- A72  Benoni, Classical without  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A73  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A74  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A75  Benoni, Classical with ...a6 and  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A76  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A77  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A78  Benoni, Classical with ...Re8 and ...Na6  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A79  Benoni, Classical,  d2d4 g8f6 c2c4 c7c5 d4d5 e7e6 b1c3 e6d5 c4d5 d7d6 e2e4 g7g6 g1f3 f8g7 f1e2 e8g8
+- A80  Dutch  d2d4 f7f5
+- A81  Dutch  d2d4 f7f5 g2g3
+- A82  Dutch, Staunton Gambit  d2d4 f7f5 e2e4
+- A83  Dutch, Staunton Gambit  d2d4 f7f5 e2e4 f5e4 b1c3 g8f6 c1g5
+- A84  Dutch  d2d4 f7f5 c2c4
+- A85  Dutch, with c4 & Nc3  d2d4 f7f5 c2c4 g8f6 b1c3
+- A86  Dutch  d2d4 f7f5 c2c4 g8f6 g2g3
+- A87  Dutch, Leningrad, Main Variation  d2d4 f7f5 c2c4 g8f6 g2g3 g7g6 f1g2 f8g7 g1f3
+- A88  Dutch, Leningrad, Main Variation with c6  d2d4 f7f5 c2c4 g8f6 g2g3 g7g6 f1g2 f8g7 g1f3 e8g8 e1g1 d7d6 b1c3 c7c6
+- A89  Dutch, Leningrad, Main Variation with Nc6  d2d4 f7f5 c2c4 g8f6 g2g3 g7g6 f1g2 f8g7 g1f3 e8g8 e1g1 d7d6 b1c3 b8c6
+- A90  Dutch  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2
+- A91  Dutch Defense  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7
+- A92  Dutch  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8
+- A93  Dutch, Stonewall, Botvinnik Variation  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d5 b2b3
+- A94  Dutch, Stonewall with Ba3  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d5 b2b3 c7c6 c1a3
+- A95  Dutch, Stonewall  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d5 b1c3 c7c6
+- A96  Dutch, Classical Variation  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d6
+- A97  Dutch, Ilyin-Genevsky  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d6 b1c3 d8e8
+- A98  Dutch, Ilyin-Genevsky Variation with Qc2  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d6 b1c3 d8e8 d1c2
+- A99  Dutch, Ilyin-Genevsky Variation with b3  d2d4 f7f5 c2c4 g8f6 g2g3 e7e6 f1g2 f8e7 g1f3 e8g8 e1g1 d7d6 b1c3 d8e8 b2b3
+- B00  Uncommon King's Pawn Opening  e2e4
+- B01  Scandinavian  e2e4 d7d5
+- B02  Alekhine's Defense  e2e4 g8f6
+- B03  Alekhine's Defense  e2e4 g8f6 e4e5 f6d5 d2d4
+- B04  Alekhine's Defense, Modern  e2e4 g8f6 e4e5 f6d5 d2d4 d7d6 g1f3
+- B05  Alekhine's Defense, Modern  e2e4 g8f6 e4e5 f6d5 d2d4 d7d6 g1f3 c8g4
+- B06  Robatsch  e2e4 g7g6
+- B07  Pirc  e2e4 d7d6 d2d4 g8f6
+- B08  Pirc, Classical  e2e4 d7d6 d2d4 g8f6 b1c3 g7g6 g1f3
+- B09  Pirc, Austrian Attack  e2e4 d7d6 d2d4 g8f6 b1c3 g7g6 f2f4
+- B10  Caro-Kann  e2e4 c7c6
+- B11  Caro-Kann, Two Knights,  e2e4 c7c6 b1c3 d7d5 g1f3 c8g4
+- B12  Caro-Kann Defense  e2e4 c7c6 d2d4
+- B13  Caro-Kann  e2e4 c7c6 d2d4 d7d5 e4d5
+- B14  Caro-Kann, Panov-Botvinnik Attack  e2e4 c7c6 d2d4 d7d5 e4d5 c6d5 c2c4 g8f6 b1c3
+- B15  Caro-Kann  e2e4 c7c6 d2d4 d7d5 b1c3
+- B16  Caro-Kann, Bronstein-Larsen Variation  e2e4 c7c6 d2d4 d7d5 b1c3 d5e4 c3e4 g8f6 e4f6 g7f6
+- B17  Caro-Kann, Steinitz Variation  e2e4 c7c6 d2d4 d7d5 b1c3 d5e4 c3e4 b8d7
+- B18  Caro-Kann, Classical  e2e4 c7c6 d2d4 d7d5 b1c3 d5e4 c3e4 c8f5
+- B19  Caro-Kann, Classical  e2e4 c7c6 d2d4 d7d5 b1c3 d5e4 c3e4 c8f5 e4g3 f5g6 h2h4 h7h6 g1f3 b8d7
+- B20  Sicilian  e2e4 c7c5
+- B21  Sicilian,  e2e4 c7c5 f2f4
+- B22  Sicilian, Alapin  e2e4 c7c5 c2c3
+- B23  Sicilian, Closed  e2e4 c7c5 b1c3
+- B24  Sicilian, Closed  e2e4 c7c5 b1c3 b8c6 g2g3
+- B25  Sicilian, Closed  e2e4 c7c5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 d2d3 d7d6
+- B26  Sicilian, Closed,  e2e4 c7c5 b1c3 b8c6 g2g3 g7g6 f1g2 f8g7 d2d3 d7d6 c1e3
+- B27  Sicilian  e2e4 c7c5 g1f3
+- B28  Sicilian, O'Kelly Variation  e2e4 c7c5 g1f3 a7a6
+- B29  Sicilian, Nimzovich-Rubinstein  e2e4 c7c5 g1f3 g8f6
+- B30  Sicilian  e2e4 c7c5 g1f3 b8c6
+- B31  Sicilian, Nimzovich-Rossolimo Attack  e2e4 c7c5 g1f3 b8c6 f1b5 g7g6
+- B32  Sicilian  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 e7e5
+- B33  Sicilian  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g8f6
+- B34  Sicilian, Accelerated Fianchetto  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 d4c6
+- B35  Sicilian, Accelerated Fianchetto, Modern Variation with Bc4  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 b1c3 f8g7 c1e3 g8f6 f1c4
+- B36  Sicilian, Accelerated Fianchetto  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 c2c4
+- B37  Sicilian, Accelerated Fianchetto  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 c2c4 f8g7
+- B38  Sicilian, Accelerated Fianchetto, Maroczy Bind,  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 c2c4 f8g7 c1e3
+- B39  Sicilian, Accelerated Fianchetto, Breyer Variation  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6 c2c4 f8g7 c1e3 g8f6 b1c3 f6g4
+- B40  Sicilian  e2e4 c7c5 g1f3 e7e6
+- B41  Sicilian, Kan  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 a7a6
+- B42  Sicilian, Kan  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 a7a6 f1d3
+- B43  Sicilian, Kan,  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 a7a6 b1c3
+- B44  Sicilian  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6
+- B45  Sicilian, Taimanov  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3
+- B46  Sicilian, Taimanov Variation  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3 a7a6
+- B47  Sicilian, Taimanov (Bastrikov) Variation  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3 d8c7
+- B48  Sicilian, Taimanov Variation  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3 d8c7 c1e3
+- B49  Sicilian, Taimanov Variation  e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 b8c6 b1c3 d8c7 c1e3 a7a6 f1e2
+- B50  Sicilian  e2e4 c7c5 g1f3 d7d6
+- B51  Sicilian, Canal-Sokolsky (Nimzovich-Rossolimo, Moscow) Attack  e2e4 c7c5 g1f3 d7d6 f1b5
+- B52  Sicilian, Canal-Sokolsky Attack  e2e4 c7c5 g1f3 d7d6 f1b5 c8d7
+- B53  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 d1d4
+- B54  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4
+- B55  Sicilian, Prins Variation, Venice Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 f2f3 e7e5 f1b5
+- B56  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3
+- B57  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 f1c4
+- B58  Sicilian  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g8f6 b1c3 d7d6 f1e2
+- B59  Sicilian, Boleslavsky Variation,  e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g8f6 b1c3 d7d6 f1e2 e7e5 d4b3
+- B60  Sicilian, Richter-Rauzer  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5
+- B61  Sicilian, Richter-Rauzer, Larsen Variation,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 c8d7 d1d2
+- B62  Sicilian, Richter-Rauzer  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6
+- B63  Sicilian, Richter-Rauzer Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2
+- B64  Sicilian, Richter-Rauzer Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 f8e7 e1c1 e8g8 f2f4
+- B65  Sicilian, Richter-Rauzer Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 f8e7 e1c1 e8g8 f2f4 c6d4 d2d4
+- B66  Sicilian, Richter-Rauzer Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 a7a6
+- B67  Sicilian, Richter-Rauzer Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 a7a6 e1c1 c8d7
+- B68  Sicilian, Richter-Rauzer Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 a7a6 e1c1 c8d7 f2f4 f8e7
+- B69  Sicilian, Richter-Rauzer Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 b8c6 c1g5 e7e6 d1d2 a7a6 e1c1 c8d7 f2f4 f8e7 d4f3 b7b5 g5f6
+- B70  Sicilian, Dragon Variation  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6
+- B71  Sicilian, Dragon, Levenfish Variation  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 f2f4
+- B72  Sicilian, Dragon  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3
+- B73  Sicilian, Dragon, Classical  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f1e2 b8c6 e1g1
+- B74  Sicilian, Dragon, Classical  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f1e2 b8c6 e1g1 e8g8 d4b3
+- B75  Sicilian, Dragon, Yugoslav Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f2f3
+- B76  Sicilian, Dragon, Yugoslav Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f2f3 e8g8
+- B77  Sicilian, Dragon, Yugoslav Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f2f3 e8g8 d1d2 b8c6 f1c4
+- B78  Sicilian, Dragon, Yugoslav Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f2f3 e8g8 d1d2 b8c6 f1c4 c8d7 e1c1
+- B79  Sicilian, Dragon, Yugoslav Attack,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6 c1e3 f8g7 f2f3 e8g8 d1d2 b8c6 f1c4 c8d7 e1c1 d8a5 c4b3 f8c8 h2h4
+- B80  Sicilian, Scheveningen  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6
+- B81  Sicilian, Scheveningen, Keres Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 g2g4
+- B82  Sicilian, Scheveningen  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f2f4
+- B83  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1e2
+- B84  Sicilian, Scheveningen  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1e2 a7a6
+- B85  Sicilian, Scheveningen, Classical  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1e2 a7a6 e1g1 d8c7 f2f4 b8c6
+- B86  Sicilian, Sozin Attack  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1c4
+- B87  Sicilian, Sozin with ...a6 and ...b5  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1c4 a7a6 c4b3 b7b5
+- B88  Sicilian, Sozin  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1c4 b8c6
+- B89  Sicilian  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6 f1c4 b8c6 c1e3
+- B90  Sicilian, Najdorf  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6
+- B91  Sicilian, Najdorf, Zagreb (Fianchetto) Variation  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 g2g3
+- B92  Sicilian, Najdorf, Opocensky Variation  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 f1e2
+- B93  Sicilian, Najdorf,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 f2f4
+- B94  Sicilian, Najdorf  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5
+- B95  Sicilian, Najdorf,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5 e7e6
+- B96  Sicilian, Najdorf  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5 e7e6 f2f4
+- B97  Sicilian, Najdorf  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5 e7e6 f2f4 d8b6
+- B98  Sicilian, Najdorf  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5 e7e6 f2f4 f8e7
+- B99  Sicilian, Najdorf,  e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 a7a6 c1g5 e7e6 f2f4 f8e7 d1f3 d8c7 e1c1 b8d7
+- C00  French Defense  e2e4 e7e6
+- C01  French, Exchange  e2e4 e7e6 d2d4 d7d5 e4d5 e6d5 b1c3 g8f6 c1g5
+- C02  French, Advance  e2e4 e7e6 d2d4 d7d5 e4e5
+- C03  French, Tarrasch  e2e4 e7e6 d2d4 d7d5 b1d2
+- C04  French, Tarrasch, Guimard Main line  e2e4 e7e6 d2d4 d7d5 b1d2 b8c6 g1f3 g8f6
+- C05  French, Tarrasch  e2e4 e7e6 d2d4 d7d5 b1d2 g8f6
+- C06  French, Tarrasch  e2e4 e7e6 d2d4 d7d5 b1d2 g8f6 e4e5 f6d7 f1d3 c7c5 c2c3 b8c6 g1e2 c5d4 c3d4
+- C07  French, Tarrasch  e2e4 e7e6 d2d4 d7d5 b1d2 c7c5
+- C08  French, Tarrasch, Open,  e2e4 e7e6 d2d4 d7d5 b1d2 c7c5 e4d5 e6d5
+- C09  French, Tarrasch, Open Variation, Main line  e2e4 e7e6 d2d4 d7d5 b1d2 c7c5 e4d5 e6d5 g1f3 b8c6
+- C10  French  e2e4 e7e6 d2d4 d7d5 b1c3
+- C11  French  e2e4 e7e6 d2d4 d7d5 b1c3 g8f6
+- C12  French, MacCutcheon  e2e4 e7e6 d2d4 d7d5 b1c3 g8f6 c1g5 f8b4
+- C13  French  e2e4 e7e6 d2d4 d7d5 b1c3 g8f6 c1g5 f8e7
+- C14  French, Classical  e2e4 e7e6 d2d4 d7d5 b1c3 g8f6 c1g5 f8e7 e4e5 f6d7 g5e7 d8e7
+- C15  French, Winawer  e2e4 e7e6 d2d4 d7d5 b1c3 f8b4
+- C16  French, Winawer  e2e4 e7e6 d2d4 d7d5 b1c3 f8b4 e4e5
+- C17  French, Winawer, Advance  e2e4 e7e6 d2d4 d7d5 b1c3 f8b4 e4e5 c7c5
+- C18  French, Winawer  e2e4 e7e6 d2d4 d7d5 b1c3 f8b4 e4e5 c7c5 a2a3 b4c3 b2c3
+- C19  French, Winawer, Advance  e2e4 e7e6 d2d4 d7d5 b1c3 f8b4 e4e5 c7c5 a2a3 b4c3 b2c3 g8e7 a3a4
+- C21  Center Game  e2e4 e7e5 d2d4 e5d4
+- C22  Center Game  e2e4 e7e5 d2d4 e5d4 d1d4 b8c6
+- C23  Bishop's Opening  e2e4 e7e5 f1c4
+- C24  Bishop's Opening  e2e4 e7e5 f1c4 g8f6
+- C25  Vienna  e2e4 e7e5 b1c3
+- C26  Vienna  e2e4 e7e5 b1c3 g8f6
+- C27  Vienna Game  e2e4 e7e5 b1c3 g8f6 f1c4 f6e4
+- C28  Vienna Game  e2e4 e7e5 b1c3 g8f6 f1c4 b8c6
+- C29  Vienna Gambit  e2e4 e7e5 b1c3 g8f6 f2f4
+- C30  King's Gambit Declined  e2e4 e7e5 f2f4
+- C31  King's Gambit Declined, Falkbeer Counter Gambit  e2e4 e7e5 f2f4 d7d5
+- C32  King's Gambit Declined, Falkbeer Counter Gambit  e2e4 e7e5 f2f4 d7d5 e4d5 e5e4 d2d3 g8f6 b1c3 f8b4 c1d2 e4e3
+- C33  King's Gambit Accepted  e2e4 e7e5 f2f4 e5f4
+- C34  King's Gambit Accepted  e2e4 e7e5 f2f4 e5f4 g1f3 g8e7
+- C35  King's Gambit Accepted, Cunningham  e2e4 e7e5 f2f4 e5f4 g1f3 f8e7
+- C36  King's Gambit Accepted, Abbazia Defense  e2e4 e7e5 f2f4 e5f4 g1f3 d7d5
+- C37  King's Gambit Accepted  e2e4 e7e5 f2f4 e5f4 g1f3 g7g5 b1c3
+- C38  King's Gambit Accepted  e2e4 e7e5 f2f4 e5f4 g1f3 g7g5 f1c4 f8g7
+- C39  King's Gambit Accepted  e2e4 e7e5 f2f4 e5f4 g1f3 g7g5 h2h4
+- C40  Latvian gambit,  e2e4 e7e5 g1f3
+- C41  Philidor Defense  e2e4 e7e5 g1f3 d7d6
+- C42  Petrov Defense  e2e4 e7e5 g1f3 g8f6
+- C43  Petrov, Modern Attack  e2e4 e7e5 g1f3 g8f6 d2d4 e5d4 e4e5 f6e4 d1d4
+- C46  Three Knights  e2e4 e7e5 g1f3 b8c6 b1c3
+- C47  Four Knights  e2e4 e7e5 g1f3 b8c6 b1c3 g8f6
+- C48  Four Knights  e2e4 e7e5 g1f3 b8c6 b1c3 g8f6 f1b5
+- C49  Four Knights  e2e4 e7e5 g1f3 b8c6 b1c3 g8f6 f1b5 f8b4
+- C51  Evans Gambit  e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 b2b4
+- C52  Evans Gambit  e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 b2b4 c5b4 c2c3 b4a5
+- C53  Giuoco Piano  e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 c2c3
+- C54  Giuoco Piano  e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 c2c3 g8f6
+- C55  Two Knights Defense  e2e4 e7e5 g1f3 b8c6 f1c4 g8f6
+- C56  Two Knights  e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4 e5d4 e1g1 f6e4
+- C57  Two Knights  e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 f3g5
+- C58  Two Knights  e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 f3g5 d7d5 e4d5 c6a5
+- C59  Two Knights  e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 f3g5 d7d5 e4d5 c6a5 c4b5 c7c6 d5c6 b7c6 b5e2 h7h6
+- C60  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5
+- C61  Ruy Lopez, Bird's Defense  e2e4 e7e5 g1f3 b8c6 f1b5 c6d4
+- C62  Ruy Lopez, Old Steinitz Defense  e2e4 e7e5 g1f3 b8c6 f1b5 d7d6
+- C63  Ruy Lopez, Schliemann Defense  e2e4 e7e5 g1f3 b8c6 f1b5 f7f5
+- C64  Ruy Lopez, Classical  e2e4 e7e5 g1f3 b8c6 f1b5 f8c5
+- C65  Ruy Lopez, Berlin Defense  e2e4 e7e5 g1f3 b8c6 f1b5 g8f6
+- C66  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 g8f6 e1g1 d7d6
+- C67  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 g8f6 e1g1 f6e4
+- C68  Ruy Lopez, Exchange  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5c6
+- C69  Ruy Lopez, Exchange, Gligoric Variation,  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5c6 d7c6 e1g1 f7f6 d2d4
+- C70  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4
+- C71  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6
+- C72  Ruy Lopez, Modern Steinitz Defense,  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6 e1g1
+- C73  Ruy Lopez, Modern Steinitz Defense  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6 a4c6 b7c6 d2d4
+- C74  Ruy Lopez, Modern Steinitz Defense  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6 c2c3
+- C75  Ruy Lopez, Modern Steinitz Defense  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6 c2c3 c8d7
+- C76  Ruy Lopez, Modern Steinitz Defense, Fianchetto (Bronstein) Variation  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 d7d6 c2c3 c8d7 d2d4 g7g6
+- C77  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6
+- C78  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1
+- C79  Ruy Lopez, Steinitz Defense Deferred  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 d7d6
+- C80  Ruy Lopez, Open  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f6e4
+- C81  Ruy Lopez, Open, Howell Attack  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f6e4 d2d4 b7b5 a4b3 d7d5 d4e5 c8e6
+- C82  Ruy Lopez, Open  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f6e4 d2d4 b7b5 a4b3 d7d5 d4e5 c8e6 c2c3
+- C83  Ruy Lopez, Open  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f6e4 d2d4 b7b5 a4b3 d7d5 d4e5 c8e6
+- C84  Ruy Lopez, Closed  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7
+- C85  Ruy Lopez, Exchange Variation Doubly Deferred (DERLD)  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 a4c6
+- C86  Ruy Lopez, Worrall Attack  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 d1e2
+- C87  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 d7d6
+- C88  Ruy Lopez  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3
+- C89  Ruy Lopez, Marshall  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d5
+- C90  Ruy Lopez, Closed  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6
+- C91  Ruy Lopez, Closed  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 d2d4
+- C92  Ruy Lopez, Closed  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3
+- C93  Ruy Lopez, Closed, Smyslov Defense  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 h7h6
+- C94  Ruy Lopez, Closed, Breyer Defense  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6b8
+- C95  Ruy Lopez, Closed, Breyer  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6b8 d2d4
+- C96  Ruy Lopez, Closed  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6a5 b3c2
+- C97  Ruy Lopez, Closed, Chigorin  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6a5 b3c2 c7c5 d2d4 d8c7
+- C98  Ruy Lopez, Closed, Chigorin  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6a5 b3c2 c7c5 d2d4 d8c7 b1d2 a5c6
+- C99  Ruy Lopez, Closed, Chigorin,  e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 e8g8 c2c3 d7d6 h2h3 c6a5 b3c2 c7c5 d2d4 d8c7 b1d2 c5d4 c3d4
+- D04  Queen's Pawn Game  d2d4 d7d5 g1f3 g8f6 e2e3
+- D05  Queen's Pawn Game  d2d4 d7d5 g1f3 g8f6 e2e3 e7e6
+- D06  Queen's Gambit Declined  d2d4 d7d5 c2c4
+- D07  Queen's Gambit Declined, Chigorin Defense  d2d4 d7d5 c2c4 b8c6
+- D08  Queen's Gambit Declined, Albin Counter Gambit  d2d4 d7d5 c2c4 e7e5
+- D09  Queen's Gambit Declined, Albin Counter Gambit,  d2d4 d7d5 c2c4 e7e5 d4e5 d5d4 g1f3 b8c6 g2g3
+- D10  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6
+- D11  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6 g1f3
+- D12  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 e2e3 c8f5
+- D13  Queen's Gambit Declined Slav, Exchange Variation  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 c4d5 c6d5
+- D14  Queen's Gambit Declined Slav, Exchange Variation  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 c4d5 c6d5 b1c3 b8c6 c1f4 c8f5
+- D15  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3
+- D16  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3 d5c4 a2a4
+- D17  Queen's Gambit Declined Slav  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3 d5c4 a2a4 c8f5
+- D18  Queen's Gambit Declined Slav, Dutch  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3 d5c4 a2a4 c8f5 e2e3
+- D19  Queen's Gambit Declined Slav, Dutch  d2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3 d5c4 a2a4 c8f5 e2e3 e7e6 f1c4 f8b4 e1g1 e8g8 d1e2
+- D20  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4
+- D21  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3
+- D22  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3 a7a6 e2e3 c8g4 f1c4 e7e6 d4d5
+- D23  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6
+- D24  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 b1c3
+- D25  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 e2e3
+- D26  Queen's Gambit Accepted  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 e2e3 e7e6
+- D27  Queen's Gambit Accepted, Classical  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 e2e3 e7e6 f1c4 c7c5 e1g1 a7a6
+- D28  Queen's Gambit Accepted, Classical  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 e2e3 e7e6 f1c4 c7c5 e1g1 a7a6 d1e2
+- D29  Queen's Gambit Accepted, Classical  d2d4 d7d5 c2c4 d5c4 g1f3 g8f6 e2e3 e7e6 f1c4 c7c5 e1g1 a7a6 d1e2 b7b5 c4b3 c8b7
+- D30  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6
+- D31  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3
+- D32  Queen's Gambit Declined, Tarrasch  d2d4 d7d5 c2c4 e7e6 b1c3 c7c5
+- D33  Queen's Gambit Declined, Tarrasch  d2d4 d7d5 c2c4 e7e6 b1c3 c7c5 c4d5 e6d5 g1f3 b8c6 g2g3
+- D34  Queen's Gambit Declined, Tarrasch  d2d4 d7d5 c2c4 e7e6 b1c3 c7c5 c4d5 e6d5 g1f3 b8c6 g2g3 g8f6 f1g2 f8e7
+- D35  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6
+- D36  Queen's Gambit Declined, Exchange, Positional line,  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c4d5 e6d5 c1g5 c7c6 d1c2
+- D37  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3
+- D38  Queen's Gambit Declined, Ragozin Variation  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 f8b4
+- D39  Queen's Gambit Declined, Ragozin, Vienna Variation  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 f8b4 c1g5 d5c4
+- D40  Queen's Gambit Declined, Semi-Tarrasch  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c5
+- D41  Queen's Gambit Declined, Semi-Tarrasch  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c5 c4d5
+- D42  Queen's Gambit Declined, Semi-Tarrasch,  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c5 c4d5 f6d5 e2e3 b8c6 f1d3
+- D43  Queen's Gambit Declined Semi-Slav  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6
+- D44  Queen's Gambit Declined Semi-Slav  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 c1g5 d5c4
+- D45  Queen's Gambit Declined Semi-Slav  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 e2e3
+- D46  Queen's Gambit Declined Semi-Slav  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 e2e3 b8d7 f1d3
+- D47  Queen's Gambit Declined Semi-Slav  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 e2e3 b8d7 f1d3 d5c4 d3c4
+- D48  Queen's Gambit Declined Semi-Slav, Meran  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 e2e3 b8d7 f1d3 d5c4 d3c4 b7b5 c4d3 a7a6
+- D49  Queen's Gambit Declined Semi-Slav, Meran  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 g1f3 c7c6 e2e3 b8d7 f1d3 d5c4 d3c4 b7b5 c4d3 a7a6 e3e4 c6c5 e4e5 c5d4 c3b5
+- D50  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5
+- D51  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 b8d7
+- D52  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 b8d7 e2e3 c7c6 g1f3
+- D53  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7
+- D54  Queen's Gambit Declined, Anti-Neo-Orthodox Variation  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 a1c1
+- D55  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3
+- D56  Queen's Gambit Declined  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 h7h6 g5h4
+- D57  Queen's Gambit Declined, Lasker Defense  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 h7h6 g5h4 f6e4 h4e7 d8e7
+- D58  Queen's Gambit Declined, Tartakower (Makagonov-Bondarevsky) System  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 h7h6 g5h4 b7b6
+- D59  Queen's Gambit Declined, Tartakower  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 h7h6 g5h4 b7b6 c4d5 f6d5
+- D60  Queen's Gambit Declined, Orthodox Defense  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7
+- D61  Queen's Gambit Declined, Orthodox Defense, Rubinstein Attack  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 d1c2
+- D62  Queen's Gambit Declined, Orthodox Defense,  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 d1c2 c7c5 c4d5
+- D63  Queen's Gambit Declined, Orthodox Defense  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1
+- D64  Queen's Gambit Declined, Orthodox Defense, Rubinstein Attack  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 d1c2
+- D65  Queen's Gambit Declined, Orthodox, Rubinstein Attack, Main line  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 d1c2 a7a6 c4d5
+- D66  Queen's Gambit Declined, Orthodox Defense, Bd3 line  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 f1d3
+- D67  Queen's Gambit Declined, Orthodox Defense, Bd3 line  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 f1d3 d5c4 d3c4 f6d5
+- D68  Queen's Gambit Declined, Orthodox Defense, Classical  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 f1d3 d5c4
+- D69  Queen's Gambit Declined, Orthodox Defense, Classical,  d2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5 f8e7 e2e3 e8g8 g1f3 b8d7 a1c1 c7c6 f1d3 d5c4
+- D70  Neo-Grunfeld Defense  d2d4 g8f6 c2c4 g7g6 f2f3 d7d5
+- D71  Neo-Grunfeld  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5
+- D72  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 c4d5 f6d5 e2e4 d5b6 g1e2
+- D73  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3
+- D74  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 c4d5 f6d5 e1g1
+- D75  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 c4d5 f6d5 e1g1 c7c5 d4c5
+- D76  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 c4d5 f6d5 e1g1 d5b6
+- D77  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 e1g1
+- D78  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 e1g1 c7c6
+- D79  Neo-Grunfeld,  d2d4 g8f6 c2c4 g7g6 g2g3 d7d5 f1g2 f8g7 g1f3 e8g8 e1g1 c7c6 c4d5 c6d5
+- D80  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5
+- D81  Grunfeld, Russian Variation  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 d1b3
+- D82  Grunfeld,  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c1f4
+- D83  Grunfeld, Grunfeld Gambit  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c1f4 f8g7 e2e3 e8g8
+- D84  Grunfeld, Grunfeld Gambit Accepted  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c1f4 f8g7 e2e3 e8g8 c4d5 f6d5 c3d5 d8d5 f4c7
+- D85  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5
+- D86  Grunfeld, Exchange  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4 d5c3 b2c3 f8g7 f1c4
+- D87  Grunfeld, Exchange  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4 d5c3 b2c3 f8g7 f1c4 e8g8 g1e2 c7c5
+- D88  Grunfeld, Spassky Variation, Main line,  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4 d5c3 b2c3 f8g7 f1c4 e8g8 g1e2
+- D89  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4 d5c3 b2c3 f8g7 f1c4 e8g8 g1e2
+- D90  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3
+- D91  Grunfeld,  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 c1g5
+- D92  Grunfeld,  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 c1f4
+- D93  Grunfeld, with Bf4 & e3  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 c1f4 e8g8 e2e3
+- D94  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 e2e3
+- D95  Grunfeld  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 e2e3 e8g8 d1b3
+- D96  Grunfeld, Russian Variation  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 d1b3
+- D97  Grunfeld, Russian  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 d1b3 d5c4 b3c4 e8g8 e2e4
+- D98  Grunfeld, Russian  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 d1b3 d5c4 b3c4 e8g8 e2e4 c8g4
+- D99  Grunfeld Defense, Smyslov  d2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3 f8g7 d1b3 d5c4 b3c4 e8g8 e2e4 c8g4 c1e3
+- E01  Catalan, Closed  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2
+- E02  Catalan, Open,  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 d5c4 d1a4
+- E03  Catalan, Open  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 d5c4 d1a4 b8d7 a4c4
+- E04  Catalan, Open,  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 d5c4 g1f3
+- E05  Catalan, Open, Classical line  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 d5c4 g1f3 f8e7
+- E06  Catalan, Closed,  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 f8e7 g1f3
+- E07  Catalan, Closed  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 f8e7 g1f3 e8g8 e1g1 b8d7
+- E08  Catalan, Closed  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 f8e7 g1f3 e8g8 e1g1 b8d7 d1c2
+- E09  Catalan, Closed  d2d4 g8f6 c2c4 e7e6 g2g3 d7d5 f1g2 f8e7 g1f3 e8g8 e1g1 b8d7 d1c2 c7c6 b1d2
+- E11  Bogo-Indian Defense  d2d4 g8f6 c2c4 e7e6 g1f3 f8b4
+- E12  Queen's Indian  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6
+- E13  Queen's Indian,  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 b1c3 c8b7 c1g5 h7h6 g5h4 f8b4
+- E14  Queen's Indian  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 e2e3
+- E15  Queen's Indian  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 g2g3
+- E16  Queen's Indian  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 g2g3 c8b7 f1g2 f8b4
+- E17  Queen's Indian  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 g2g3 c8b7 f1g2 f8e7
+- E18  Queen's Indian, Old Main line,  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 g2g3 c8b7 f1g2 f8e7 e1g1 e8g8 b1c3
+- E19  Queen's Indian, Old Main line,  d2d4 g8f6 c2c4 e7e6 g1f3 b7b6 g2g3 c8b7 f1g2 f8e7 e1g1 e8g8 b1c3 f6e4 d1c2 e4c3
+- E20  Nimzo-Indian  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4
+- E21  Nimzo-Indian, Three Knights  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 g1f3
+- E22  Nimzo-Indian, Spielmann Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1b3
+- E23  Nimzo-Indian, Spielmann  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1b3 c7c5 d4c5 b8c6
+- E24  Nimzo-Indian, Samisch  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3
+- E25  Nimzo-Indian, Samisch  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3 c7c5 f2f3 d7d5 c4d5
+- E26  Nimzo-Indian, Samisch  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3 c7c5 e2e3
+- E27  Nimzo-Indian, Samisch Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3 e8g8
+- E28  Nimzo-Indian, Samisch Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3 e8g8 e2e3
+- E29  Nimzo-Indian, Samisch  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 a2a3 b4c3 b2c3 e8g8 e2e3 c7c5 f1d3 b8c6
+- E30  Nimzo-Indian, Leningrad  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 c1g5
+- E31  Nimzo-Indian, Leningrad, Main line  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 c1g5 h7h6 g5h4 c7c5 d4d5 d7d6
+- E32  Nimzo-Indian, Classical  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2
+- E33  Nimzo-Indian, Classical  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 b8c6
+- E34  Nimzo-Indian, Classical, Noa Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 d7d5
+- E35  Nimzo-Indian, Classical, Noa Variation,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 d7d5 c4d5 e6d5
+- E36  Nimzo-Indian, Classical  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 d7d5 a2a3
+- E37  Nimzo-Indian, Classical  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 d7d5 a2a3 b4c3 c2c3 f6e4 c3c2
+- E38  Nimzo-Indian, Classical,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 c7c5
+- E39  Nimzo-Indian, Classical, Pirc Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2 c7c5 d4c5 e8g8
+- E40  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3
+- E41  Nimzo-Indian  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 c7c5
+- E42  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 c7c5 g1e2
+- E43  Nimzo-Indian, Fischer Variation  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 b7b6
+- E44  Nimzo-Indian, Fischer Variation,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 b7b6 g1e2
+- E45  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 b7b6 g1e2 c8a6
+- E46  Nimzo-Indian  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8
+- E47  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 f1d3
+- E48  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 f1d3 d7d5
+- E49  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 f1d3 d7d5 a2a3 b4c3 b2c3
+- E50  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3
+- E51  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5
+- E52  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 b7b6
+- E53  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5
+- E54  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 d5c4 d3c4
+- E55  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 d5c4 d3c4 b8d7
+- E56  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 b8c6
+- E57  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 b8c6 a2a3 d5c4
+- E58  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 b8c6 a2a3 b4c3 b2c3
+- E59  Nimzo-Indian,  d2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3 e8g8 g1f3 d7d5 f1d3 c7c5 e1g1 b8c6 a2a3 b4c3 b2c3 d5c4 d3c4
+- E60  King's Indian Defense  d2d4 g8f6 c2c4 g7g6
+- E61  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3
+- E62  King's Indian, Fianchetto  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3
+- E63  King's Indian, Fianchetto, Panno Variation  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 b8c6 e1g1 a7a6
+- E64  King's Indian, Fianchetto, Yugoslav System  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 c7c5
+- E65  King's Indian, Fianchetto, Yugoslav,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 c7c5 e1g1
+- E66  King's Indian, Fianchetto, Yugoslav Panno  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 c7c5 e1g1 b8c6 d4d5
+- E67  King's Indian, Fianchetto  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 b8d7
+- E68  King's Indian, Fianchetto, Classical Variation,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 b8d7 e1g1 e7e5 e2e4
+- E69  King's Indian, Fianchetto, Classical Main line  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 g1f3 d7d6 g2g3 e8g8 f1g2 b8d7 e1g1 e7e5 e2e4 c7c6 h2h3
+- E70  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4
+- E71  King's Indian, Makagonov System (  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 h2h3
+- E72  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g2g3
+- E73  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f1e2
+- E74  King's Indian, Averbakh,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f1e2 e8g8 c1g5 c7c5
+- E75  King's Indian, Averbakh, Main line  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f1e2 e8g8 c1g5 c7c5 d4d5 e7e6
+- E76  King's Indian, Four Pawns Attack  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f4
+- E77  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f4 e8g8 f1e2
+- E78  King's Indian, Four Pawns Attack, with Be2 and Nf3  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f4 e8g8 f1e2 c7c5 g1f3
+- E79  King's Indian, Four Pawns Attack, Main line  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f4 e8g8 f1e2 c7c5 g1f3 c5d4 f3d4 b8c6 c1e3
+- E80  King's Indian, Samisch Variation  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3
+- E81  King's Indian, Samisch  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8
+- E82  King's Indian, Samisch, double Fianchetto Variation  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 b7b6
+- E83  King's Indian, Samisch  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 b8c6
+- E84  King's Indian, Samisch, Panno Main line  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 b8c6 g1e2 a7a6 d1d2 a8b8
+- E85  King's Indian, Samisch, Orthodox Variation  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 e7e5
+- E86  King's Indian, Samisch, Orthodox,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 e7e5 g1e2 c7c6
+- E87  King's Indian, Samisch, Orthodox  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 e7e5 d4d5
+- E88  King's Indian, Samisch, Orthodox,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 e7e5 d4d5 c7c6
+- E89  King's Indian, Samisch, Orthodox Main line  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3 e8g8 c1e3 e7e5 d4d5 c7c6 g1e2 c6d5
+- E90  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3
+- E91  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2
+- E92  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5
+- E93  King's Indian, Petrosian System  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 d4d5 b8d7
+- E94  King's Indian, Orthodox  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1
+- E95  King's Indian, Orthodox,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1 b8d7 f1e1
+- E96  King's Indian, Orthodox,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1 b8d7 f1e1 c7c6 e2f1 a7a5
+- E97  King's Indian  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1 b8c6
+- E98  King's Indian, Orthodox, Aronin-Taimanov,  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1 b8c6 d4d5 c6e7 f3e1
+- E99  King's Indian, Orthodox, Aronin-Taimanov  d2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e8g8 f1e2 e7e5 e1g1 b8c6 d4d5 c6e7 f3e1 f6d7 f2f3 f7f5

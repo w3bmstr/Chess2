@@ -40,6 +40,7 @@ resetBoard = function() {
 	// Initialize position history
 	const initialFEN = boardToFEN();
 	state.positionHistory = [initialFEN];
+	if (typeof rebuildRepetitionTracker === 'function') rebuildRepetitionTracker();
 	
 	updateHud();
 	clearHint();

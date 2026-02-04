@@ -1,13 +1,7 @@
-// DEBUG: Log all clicks on the page to help diagnose event issues
-document.body.addEventListener('click', function(e) {
-  console.log('[DEBUG] BODY CLICK', e.target);
-});
 // ============================================================================
 // Auto-Play (Engine vs Engine)
 // ============================================================================
-document.body.addEventListener('click', function(e) {
-    console.log('[DEBUG] BODY CLICK', e.target);
-});
+
 
 let autoPlayActive = false;
 let autoPlayTimer = null;
@@ -144,13 +138,62 @@ function createEngineInfoPanel() {
 }
 
 function updateEngineInfo({ depth, nodes, evalScore }) {
-	const d = document.getElementById('engine-info-depth');
-	const n = document.getElementById('engine-info-nodes');
-	const e = document.getElementById('engine-info-eval');
-	if (d) d.textContent = `Depth: ${depth ?? '--'}`;
-	if (n) n.textContent = `Nodes: ${nodes ?? '--'}`;
-	if (e) e.textContent = `Eval: ${evalScore !== undefined ? formatScore(evalScore) : '--'}`;
+  // Throttle DOM updates to keep mobile smooth.
+  if (!updateEngineInfo._state) {
+    updateEngineInfo._state = {
+      lastFlush: 0,
+      timer: null,
+      latest: null,
+      minIntervalMs: 80
+    };
+  }
+  const s = updateEngineInfo._state;
+  s.latest = { depth, nodes, evalScore };
+
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  const dueIn = s.minIntervalMs - (now - s.lastFlush);
+
+  const apply = () => {
+    const info = s.latest || { depth: '--', nodes: '--', evalScore: undefined };
+    const dEl = document.getElementById('engine-info-depth');
+    const nEl = document.getElementById('engine-info-nodes');
+    const eEl = document.getElementById('engine-info-eval');
+    if (dEl) dEl.textContent = `Depth: ${info.depth ?? '--'}`;
+    if (nEl) nEl.textContent = `Nodes: ${info.nodes ?? '--'}`;
+    if (eEl) eEl.textContent = `Eval: ${info.evalScore !== undefined ? formatScore(info.evalScore) : '--'}`;
+  };
+
+  const flush = () => {
+    s.timer = null;
+    s.lastFlush = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    apply();
+  };
+
+  if (dueIn <= 0) {
+    flush();
+    return;
+  }
+  if (!s.timer) {
+    s.timer = setTimeout(flush, Math.max(0, Math.ceil(dueIn)));
+  }
 }
+
+updateEngineInfo.flush = function() {
+  const s = updateEngineInfo._state;
+  if (!s) return;
+  if (s.timer) {
+    clearTimeout(s.timer);
+    s.timer = null;
+  }
+  s.lastFlush = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  const info = s.latest || { depth: '--', nodes: '--', evalScore: undefined };
+  const dEl = document.getElementById('engine-info-depth');
+  const nEl = document.getElementById('engine-info-nodes');
+  const eEl = document.getElementById('engine-info-eval');
+  if (dEl) dEl.textContent = `Depth: ${info.depth ?? '--'}`;
+  if (nEl) nEl.textContent = `Nodes: ${info.nodes ?? '--'}`;
+  if (eEl) eEl.textContent = `Eval: ${info.evalScore !== undefined ? formatScore(info.evalScore) : '--'}`;
+};
 
 function clearEngineInfo() {
 	updateEngineInfo({ depth: '--', nodes: '--', evalScore: undefined });
@@ -159,17 +202,20 @@ function clearEngineInfo() {
 // Patch searchBestMove and aiChooseMove to update info
 let engineInfo = { depth: 0, nodes: 0, evalScore: 0 };
 
-// Wrap searchBestMove to count nodes and update info
+// IMPORTANT: Do NOT override the engine's recursive searchBestMove.
+// Instead, expose a separate UI wrapper that calls the original and updates HUD once per root call.
 if (typeof searchBestMove === 'function') {
-	const _originalSearchBestMove = searchBestMove;
-	window.searchBestMove = function(ctx, depth, alpha, beta, color, rootColor, deadline, ply) {
-		engineInfo.nodes = 0;
-		let result = _originalSearchBestMove(ctx, depth, alpha, beta, color, rootColor, deadline, ply);
-		if (result && typeof result.score === 'number') engineInfo.evalScore = result.score;
-		engineInfo.depth = depth;
-		updateEngineInfo(engineInfo);
-		return result;
-	};
+  const _originalSearchBestMove = searchBestMove;
+  window.searchBestMoveWithInfo = function(ctx, depth, alpha, beta, color, rootColor, deadline, ply) {
+    // Optional node counter from search.js (var SEARCH_NODES)
+	try { if (typeof SEARCH_NODES !== 'undefined') SEARCH_NODES = 0; } catch (e) { /* ignore */ }
+    const result = _originalSearchBestMove(ctx, depth, alpha, beta, color, rootColor, deadline, ply);
+    if (result && typeof result.score === 'number') engineInfo.evalScore = result.score;
+    engineInfo.depth = depth;
+	try { if (typeof SEARCH_NODES !== 'undefined') engineInfo.nodes = SEARCH_NODES; } catch (e) { /* ignore */ }
+    updateEngineInfo(engineInfo);
+    return result;
+  };
 }
 
 // Patch aiChooseMove to clear and update info
@@ -209,19 +255,18 @@ if (typeof aiChooseMove === 'function') {
 			let prevScore = 0;
 			let totalNodes = 0;
 			for (let d = 1; d <= maxDepth; d++) {
-				let window = 40;
+        let aspWindow = 0.40;
 				let alpha = -Infinity;
 				let beta = Infinity;
-				let failCount = 0;
 				if (d > 1 && Number.isFinite(prevScore)) {
-					alpha = prevScore - window;
-					beta = prevScore + window;
+          alpha = prevScore - aspWindow;
+          beta = prevScore + aspWindow;
 				}
-				let res;
-				let nodesBefore = engineInfo.nodes;
-				res = window.searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-				let nodesAfter = engineInfo.nodes;
-				totalNodes += (nodesAfter - nodesBefore) || 0;
+        let res;
+        const searchFn = (typeof window.searchBestMoveWithInfo === 'function') ? window.searchBestMoveWithInfo : searchBestMove;
+        res = searchFn(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
+        // engineInfo.nodes updated by the wrapper (if SEARCH_NODES exists)
+        if (Number.isFinite(engineInfo.nodes)) totalNodes += engineInfo.nodes;
 				if (res && res.move) {
 					best = res;
 					prevScore = res.score;
@@ -4225,7 +4270,3084 @@ const OPENINGS =
       "c2c4",
       "g7g6"
     ]
-  }
+  },
+  {
+  "eco": "A00",
+  "name": "Uncommon Opening",
+  "moves": ["a2a3","b2b3","d2d3","g2g4"]
+},
+{
+  "eco": "A02",
+  "name": "Bird's Opening",
+  "moves": ["f2f4"]
+},
+{
+  "eco": "A03",
+  "name": "Bird's Opening",
+  "moves": ["f2f4","d7d5"]
+},
+{
+  "eco": "A04",
+  "name": "Reti Opening",
+  "moves": ["g1f3"]
+},
+{
+  "eco": "A05",
+  "name": "Reti Opening",
+  "moves": ["g1f3","g8f6"]
+},
+{
+  "eco": "A06",
+  "name": "Reti Opening",
+  "moves": ["g1f3","d7d5"]
+},
+{
+  "eco": "A07",
+  "name": "King's Indian Attack",
+  "moves": ["g1f3","d7d5","g2g3"]
+},
+{
+  "eco": "A08",
+  "name": "King's Indian Attack",
+  "moves": ["g1f3","d7d5","g2g3","c7c5","f1g2"]
+},
+{
+  "eco": "A09",
+  "name": "Reti Opening",
+  "moves": ["g1f3","d7d5","c2c4"]
+},
+{
+  "eco": "A10",
+  "name": "English",
+  "moves": ["c2c4"]
+},
+{
+  "eco": "A11",
+  "name": "English, Caro-Kann Defensive System",
+  "moves": ["c2c4","c7c6"]
+},
+{
+  "eco": "A12",
+  "name": "English with b3",
+  "moves": ["c2c4","c7c6","g1f3","d7d5","b2b3"]
+},
+{
+  "eco": "A13",
+  "name": "English",
+  "moves": ["c2c4","e7e6"]
+},
+{
+  "eco": "A14",
+  "name": "English",
+  "moves": ["c2c4","e7e6","g1f3","d7d5","g2g3","g8f6","f1g2","f8e7","e1g1"]
+},
+{
+  "eco": "A15",
+  "name": "English",
+  "moves": ["c2c4","g8f6"]
+},
+{
+  "eco": "A16",
+  "name": "English",
+  "moves": ["c2c4","g8f6","b1c3"]
+},
+{
+  "eco": "A17",
+  "name": "English",
+  "moves": ["c2c4","g8f6","b1c3","e7e6"]
+},
+{
+  "eco": "A18",
+  "name": "English, Mikenas-Carls",
+  "moves": ["c2c4","g8f6","b1c3","e7e6","e2e4"]
+},
+{
+  "eco": "A19",
+  "name": "English, Mikenas-Carls, Sicilian Variation",
+  "moves": ["c2c4","g8f6","b1c3","e7e6","e2e4","c7c5"]
+},
+{
+  "eco": "A20",
+  "name": "English",
+  "moves": ["c2c4","e7e5"]
+},
+{
+  "eco": "A21",
+  "name": "English",
+  "moves": ["c2c4","e7e5","b1c3"]
+},
+{
+  "eco": "A22",
+  "name": "English",
+  "moves": ["c2c4","e7e5","b1c3","g8f6"]
+},
+{
+  "eco": "A23",
+  "name": "English, Bremen System, Keres Variation",
+  "moves": ["c2c4","e7e5","b1c3","g8f6","g2g3","c7c6"]
+},
+{
+  "eco": "A24",
+  "name": "English, Bremen System with ...g6",
+  "moves": ["c2c4","e7e5","b1c3","g8f6","g2g3","g7g6"]
+},
+{
+  "eco": "A25",
+  "name": "English",
+  "moves": ["c2c4","e7e5","b1c3","b8c6"]
+},
+{
+  "eco": "A26",
+  "name": "English",
+  "moves": ["c2c4","e7e5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","d2d3","d7d6"]
+},
+{
+  "eco": "A27",
+  "name": "English, Three Knights System",
+  "moves": ["c2c4","e7e5","b1c3","b8c6","g1f3"]
+},
+{
+  "eco": "A28",
+  "name": "English",
+  "moves": ["c2c4","e7e5","b1c3","b8c6","g1f3","g8f6"]
+},
+{
+  "eco": "A29",
+  "name": "English, Four Knights, Kingside Fianchetto",
+  "moves": ["c2c4","e7e5","b1c3","b8c6","g1f3","g8f6","g2g3"]
+},
+{
+  "eco": "A30",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5"]
+},
+{
+  "eco": "A31",
+  "name": "English, Symmetrical, Benoni Formation",
+  "moves": ["c2c4","c7c5","g1f3","g8f6","d2d4"]
+},
+{
+  "eco": "A32",
+  "name": "English, Symmetrical Variation",
+  "moves": ["c2c4","c7c5","g1f3","g8f6","d2d4","c5d4","f3d4","e7e6"]
+},
+{
+  "eco": "A33",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5","g1f3","g8f6","d2d4","c5d4","f3d4","e7e6","b1c3","b8c6"]
+},
+{
+  "eco": "A34",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5","b1c3"]
+},
+{
+  "eco": "A35",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5","b1c3","b8c6"]
+},
+{
+  "eco": "A36",
+  "name": "English",
+  "moves": ["c2c4","c7c5","b1c3","b8c6","g2g3"]
+},
+{
+  "eco": "A37",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","g1f3"]
+},
+{
+  "eco": "A38",
+  "name": "English, Symmetrical",
+  "moves": ["c2c4","c7c5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","g1f3","g8f6"]
+},
+{
+  "eco": "A39",
+  "name": "English, Symmetrical, Main line with d4",
+  "moves": ["c2c4","c7c5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","g1f3","g8f6","e1g1","e8g8","d2d4"]
+},
+{
+  "eco": "A40",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4"]
+},
+{
+  "eco": "A41",
+  "name": "Queen's Pawn Game (with ...d6)",
+  "moves": ["d2d4","d7d6"]
+},
+{
+  "eco": "A42",
+  "name": "Modern Defense, Averbakh System",
+  "moves": ["d2d4","d7d6","c2c4","g7g6","b1c3","f8g7","e2e4"]
+},
+{
+  "eco": "A43",
+  "name": "Old Benoni",
+  "moves": ["d2d4","c7c5"]
+},
+{
+  "eco": "A44",
+  "name": "Old Benoni Defense",
+  "moves": ["d2d4","c7c5","d4d5","e7e5"]
+},
+{
+  "eco": "A45",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","g8f6"]
+},
+{
+  "eco": "A46",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","g8f6","g1f3"]
+},
+{
+  "eco": "A47",
+  "name": "Queen's Indian",
+  "moves": ["d2d4","g8f6","g1f3","b7b6"]
+},
+{
+  "eco": "A48",
+  "name": "King's Indian",
+  "moves": ["d2d4","g8f6","g1f3","g7g6"]
+},
+{
+  "eco": "A49",
+  "name": "King's Indian, Fianchetto without c4",
+  "moves": ["d2d4","g8f6","g1f3","g7g6","g2g3"]
+},
+{
+  "eco": "A51",
+  "name": "Budapest Gambit",
+  "moves": ["d2d4","g8f6","c2c4","e7e5"]
+},
+{
+  "eco": "A52",
+  "name": "Budapest Gambit",
+  "moves": ["d2d4","g8f6","c2c4","e7e5","d4e5","f6g4"]
+},
+{
+  "eco": "A53",
+  "name": "Old Indian",
+  "moves": ["d2d4","g8f6","c2c4","d7d6"]
+},
+{
+  "eco": "A54",
+  "name": "Old Indian, Ukrainian Variation",
+  "moves": ["d2d4","g8f6","c2c4","d7d6","b1c3","e7e5","g1f3"]
+},
+{
+  "eco": "A55",
+  "name": "Old Indian, Main line",
+  "moves": ["d2d4","g8f6","c2c4","d7d6","b1c3","e7e5","g1f3","b8d7","e2e4"]
+},
+{
+  "eco": "A56",
+  "name": "Benoni Defense",
+  "moves": ["d2d4","g8f6","c2c4","c7c5"]
+},
+{
+  "eco": "A57",
+  "name": "Benko Gambit",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","b7b5"]
+},
+{
+  "eco": "A58",
+  "name": "Benko Gambit",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","b7b5","c4b5","a7a6","b5a6"]
+},
+{
+  "eco": "A59",
+  "name": "Benko Gambit",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","b7b5","c4b5","a7a6","b5a6","c8a6","b1c3","d7d6","e2e4"]
+},
+{
+  "eco": "A60",
+  "name": "Benoni Defense",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6"]
+},
+{
+  "eco": "A61",
+  "name": "Benoni",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","g1f3","g7g6"]
+},
+{
+  "eco": "A62",
+  "name": "Benoni, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","g1f3","g7g6","g2g3","f8g7","f1g2","e8g8"]
+},
+{
+  "eco": "A63",
+  "name": "Benoni, Fianchetto",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","g1f3","g7g6","g2g3","f8g7","f1g2","e8g8"]
+},
+{
+  "eco": "A64",
+  "name": "Benoni, Fianchetto",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","g1f3","g7g6","g2g3","f8g7","f1g2","e8g8"]
+},
+{
+  "eco": "A65",
+  "name": "Benoni",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4"]
+},
+{
+  "eco": "A66",
+  "name": "Benoni",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","f2f4"]
+},
+{
+  "eco": "A67",
+  "name": "Benoni, Taimanov Variation",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","f2f4","f8g7","f1b5"]
+},
+{
+  "eco": "A68",
+  "name": "Benoni, Four Pawns Attack",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","f2f4","f8g7","g1f3","e8g8"]
+},
+{
+  "eco": "A69",
+  "name": "Benoni, Four Pawns Attack, Main line",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","f2f4","f8g7","g1f3","e8g8"]
+},
+
+{
+  "eco": "A70",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3"]
+},
+{
+  "eco": "A71",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","c1g5"]
+},
+{
+  "eco": "A72",
+  "name": "Benoni, Classical without ...Nc6",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A73",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A74",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A75",
+  "name": "Benoni, Classical with ...a6",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A76",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A77",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A78",
+  "name": "Benoni, Classical with ...Re8 and ...Na6",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A79",
+  "name": "Benoni, Classical",
+  "moves": ["d2d4","g8f6","c2c4","c7c5","d4d5","e7e6","b1c3","e6d5","c4d5","d7d6","e2e4","g7g6","g1f3","f8g7","f1e2","e8g8"]
+},
+{
+  "eco": "A80",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5"]
+},
+{
+  "eco": "A81",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5","g2g3"]
+},
+{
+  "eco": "A82",
+  "name": "Dutch, Staunton Gambit",
+  "moves": ["d2d4","f7f5","e2e4"]
+},
+{
+  "eco": "A83",
+  "name": "Dutch, Staunton Gambit",
+  "moves": ["d2d4","f7f5","e2e4","f5e4","b1c3","g8f6","c1g5"]
+},
+{
+  "eco": "A84",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5","c2c4"]
+},
+{
+  "eco": "A85",
+  "name": "Dutch, with c4 & Nc3",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","b1c3"]
+},
+{
+  "eco": "A86",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3"]
+},
+{
+  "eco": "A87",
+  "name": "Dutch, Leningrad, Main Variation",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","g7g6","f1g2","f8g7","g1f3"]
+},
+{
+  "eco": "A88",
+  "name": "Dutch, Leningrad, Main Variation with c6",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","g7g6","f1g2","f8g7","g1f3","e8g8","e1g1","d7d6","b1c3","c7c6"]
+},
+{
+  "eco": "A89",
+  "name": "Dutch, Leningrad, Main Variation with Nc6",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","g7g6","f1g2","f8g7","g1f3","e8g8","e1g1","d7d6","b1c3","b8c6"]
+},
+{
+  "eco": "A90",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2"]
+},
+{
+  "eco": "A91",
+  "name": "Dutch Defense",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7"]
+},
+{
+  "eco": "A92",
+  "name": "Dutch",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8"]
+},
+{
+  "eco": "A93",
+  "name": "Dutch, Stonewall, Botvinnik Variation",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d5","b2b3"]
+},
+{
+  "eco": "A94",
+  "name": "Dutch, Stonewall with Ba3",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d5","b2b3","c7c6","c1a3"]
+},
+{
+  "eco": "A95",
+  "name": "Dutch, Stonewall",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d5","b1c3","c7c6"]
+},
+{
+  "eco": "A96",
+  "name": "Dutch, Classical Variation",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d6"]
+},
+{
+  "eco": "A97",
+  "name": "Dutch, Ilyin-Genevsky",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d6","b1c3","d8e8"]
+},
+{
+  "eco": "A98",
+  "name": "Dutch, Ilyin-Genevsky Variation with Qc2",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d6","b1c3","d8e8","d1c2"]
+},
+{
+  "eco": "A99",
+  "name": "Dutch, Ilyin-Genevsky Variation with b3",
+  "moves": ["d2d4","f7f5","c2c4","g8f6","g2g3","e7e6","f1g2","f8e7","g1f3","e8g8","e1g1","d7d6","b1c3","d8e8","b2b3"]
+},
+{
+  "eco": "B00",
+  "name": "Uncommon King's Pawn Opening",
+  "moves": ["e2e4"]
+},
+{
+  "eco": "B01",
+  "name": "Scandinavian",
+  "moves": ["e2e4","d7d5"]
+},
+{
+  "eco": "B02",
+  "name": "Alekhine's Defense",
+  "moves": ["e2e4","g8f6"]
+},
+{
+  "eco": "B03",
+  "name": "Alekhine's Defense",
+  "moves": ["e2e4","g8f6","e4e5","f6d5","d2d4"]
+},
+{
+  "eco": "B04",
+  "name": "Alekhine's Defense, Modern",
+  "moves": ["e2e4","g8f6","e4e5","f6d5","d2d4","d7d6","g1f3"]
+},
+{
+  "eco": "B05",
+  "name": "Alekhine's Defense, Modern",
+  "moves": ["e2e4","g8f6","e4e5","f6d5","d2d4","d7d6","g1f3","c8g4"]
+},
+{
+  "eco": "B06",
+  "name": "Robatsch",
+  "moves": ["e2e4","g7g6"]
+},
+{
+  "eco": "B07",
+  "name": "Pirc",
+  "moves": ["e2e4","d7d6","d2d4","g8f6"]
+},
+{
+  "eco": "B08",
+  "name": "Pirc, Classical",
+  "moves": ["e2e4","d7d6","d2d4","g8f6","b1c3","g7g6","g1f3"]
+},
+{
+  "eco": "B09",
+  "name": "Pirc, Austrian Attack",
+  "moves": ["e2e4","d7d6","d2d4","g8f6","b1c3","g7g6","f2f4"]
+},
+{
+  "eco": "B10",
+  "name": "Caro-Kann",
+  "moves": ["e2e4","c7c6"]
+},
+{
+  "eco": "B11",
+  "name": "Caro-Kann, Two Knights",
+  "moves": ["e2e4","c7c6","b1c3","d7d5","g1f3","c8g4"]
+},
+{
+  "eco": "B12",
+  "name": "Caro-Kann Defense",
+  "moves": ["e2e4","c7c6","d2d4"]
+},
+{
+  "eco": "B13",
+  "name": "Caro-Kann",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","e4d5"]
+},
+{
+  "eco": "B14",
+  "name": "Caro-Kann, Panov-Botvinnik Attack",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","e4d5","c6d5","c2c4","g8f6","b1c3"]
+},
+{
+  "eco": "B15",
+  "name": "Caro-Kann",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","b1c3"]
+},
+{
+  "eco": "B16",
+  "name": "Caro-Kann, Bronstein-Larsen Variation",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","b1c3","d5e4","c3e4","g8f6","e4f6","g7f6"]
+},
+{
+  "eco": "B17",
+  "name": "Caro-Kann, Steinitz Variation",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","b1c3","d5e4","c3e4","b8d7"]
+},
+{
+  "eco": "B18",
+  "name": "Caro-Kann, Classical",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","b1c3","d5e4","c3e4","c8f5"]
+},
+{
+  "eco": "B19",
+  "name": "Caro-Kann, Classical",
+  "moves": ["e2e4","c7c6","d2d4","d7d5","b1c3","d5e4","c3e4","c8f5","e4g3","f5g6","h2h4","h7h6","g1f3","b8d7"]
+},
+{
+  "eco": "B20",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5"]
+},
+{
+  "eco": "B21",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","f2f4"]
+},
+{
+  "eco": "B22",
+  "name": "Sicilian, Alapin",
+  "moves": ["e2e4","c7c5","c2c3"]
+},
+{
+  "eco": "B23",
+  "name": "Sicilian, Closed",
+  "moves": ["e2e4","c7c5","b1c3"]
+},
+{
+  "eco": "B24",
+  "name": "Sicilian, Closed",
+  "moves": ["e2e4","c7c5","b1c3","b8c6","g2g3"]
+},
+{
+  "eco": "B25",
+  "name": "Sicilian, Closed",
+  "moves": ["e2e4","c7c5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","d2d3","d7d6"]
+},
+{
+  "eco": "B26",
+  "name": "Sicilian, Closed",
+  "moves": ["e2e4","c7c5","b1c3","b8c6","g2g3","g7g6","f1g2","f8g7","d2d3","d7d6","c1e3"]
+},
+{
+  "eco": "B27",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3"]
+},
+{
+  "eco": "B28",
+  "name": "Sicilian, O'Kelly Variation",
+  "moves": ["e2e4","c7c5","g1f3","a7a6"]
+},
+{
+  "eco": "B29",
+  "name": "Sicilian, Nimzovich-Rubinstein",
+  "moves": ["e2e4","c7c5","g1f3","g8f6"]
+},
+
+{
+  "eco": "B30",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","b8c6"]
+},
+{
+  "eco": "B31",
+  "name": "Sicilian, Nimzovich-Rossolimo Attack",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","f1b5","g7g6"]
+},
+{
+  "eco": "B32",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","e7e5"]
+},
+{
+  "eco": "B33",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g8f6"]
+},
+{
+  "eco": "B34",
+  "name": "Sicilian, Accelerated Fianchetto",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","d4c6"]
+},
+{
+  "eco": "B35",
+  "name": "Sicilian, Accelerated Fianchetto, Modern Variation with Bc4",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","b1c3","f8g7","c1e3","g8f6","f1c4"]
+},
+{
+  "eco": "B36",
+  "name": "Sicilian, Accelerated Fianchetto",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","c2c4"]
+},
+{
+  "eco": "B37",
+  "name": "Sicilian, Accelerated Fianchetto",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","c2c4","f8g7"]
+},
+{
+  "eco": "B38",
+  "name": "Sicilian, Accelerated Fianchetto, Maroczy Bind",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","c2c4","f8g7","c1e3"]
+},
+{
+  "eco": "B39",
+  "name": "Sicilian, Accelerated Fianchetto, Breyer Variation",
+  "moves": ["e2e4","c7c5","g1f3","b8c6","d2d4","c5d4","f3d4","g7g6","c2c4","f8g7","c1e3","g8f6","b1c3","f6g4"]
+},
+{
+  "eco": "B40",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","e7e6"]
+},
+{
+  "eco": "B41",
+  "name": "Sicilian, Kan",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","a7a6"]
+},
+{
+  "eco": "B42",
+  "name": "Sicilian, Kan",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","a7a6","f1d3"]
+},
+{
+  "eco": "B43",
+  "name": "Sicilian, Kan",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","a7a6","b1c3"]
+},
+{
+  "eco": "B44",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6"]
+},
+{
+  "eco": "B45",
+  "name": "Sicilian, Taimanov",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6","b1c3"]
+},
+{
+  "eco": "B46",
+  "name": "Sicilian, Taimanov Variation",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6","b1c3","a7a6"]
+},
+{
+  "eco": "B47",
+  "name": "Sicilian, Taimanov (Bastrikov) Variation",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6","b1c3","d8c7"]
+},
+{
+  "eco": "B48",
+  "name": "Sicilian, Taimanov Variation",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6","b1c3","d8c7","c1e3"]
+},
+{
+  "eco": "B49",
+  "name": "Sicilian, Taimanov Variation",
+  "moves": ["e2e4","c7c5","g1f3","e7e6","d2d4","c5d4","f3d4","b8c6","b1c3","d8c7","c1e3","a7a6","f1e2"]
+},
+{
+  "eco": "B50",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","d7d6"]
+},
+{
+  "eco": "B51",
+  "name": "Sicilian, Canal-Sokolsky Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","f1b5"]
+},
+{
+  "eco": "B52",
+  "name": "Sicilian, Canal-Sokolsky Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","f1b5","c8d7"]
+},
+{
+  "eco": "B53",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4"]
+},
+{
+  "eco": "B54",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6"]
+},
+{
+  "eco": "B55",
+  "name": "Sicilian, Prins Variation",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","f1b5"]
+},
+{
+  "eco": "B56",
+  "name": "Sicilian",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3"]
+},
+{
+  "eco": "B57",
+  "name": "Sicilian, Sozin",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","c8g4"]
+},
+{
+  "eco": "B58",
+  "name": "Sicilian, Classical",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6"]
+},
+{
+  "eco": "B59",
+  "name": "Sicilian, Boleslavsky Variation",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","f1e2","e7e5"]
+},
+
+{
+  "eco": "B60",
+  "name": "Sicilian, Richter-Rauzer",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5"]
+},
+{
+  "eco": "B61",
+  "name": "Sicilian, Richter-Rauzer",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6"]
+},
+{
+  "eco": "B62",
+  "name": "Sicilian, Richter-Rauzer",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2"]
+},
+{
+  "eco": "B63",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7"]
+},
+{
+  "eco": "B64",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1"]
+},
+{
+  "eco": "B65",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1","e8g8"]
+},
+{
+  "eco": "B66",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1","e8g8","f1e2"]
+},
+{
+  "eco": "B67",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1","e8g8","f1e2","h7h6"]
+},
+{
+  "eco": "B68",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1","e8g8","f1e2","h7h6","g5e3"]
+},
+{
+  "eco": "B69",
+  "name": "Sicilian, Richter-Rauzer, Rauzer Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","b8c6","c1g5","e7e6","d1d2","f8e7","e1c1","e8g8","f1e2","h7h6","g5e3","c8d7"]
+},
+
+{
+  "eco": "B70",
+  "name": "Sicilian, Dragon",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6"]
+},
+{
+  "eco": "B71",
+  "name": "Sicilian, Dragon, Levenfish Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","f2f4"]
+},
+{
+  "eco": "B72",
+  "name": "Sicilian, Dragon, Classical",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","f1e2"]
+},
+{
+  "eco": "B73",
+  "name": "Sicilian, Dragon, Classical",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","f1e2","f8g7"]
+},
+{
+  "eco": "B74",
+  "name": "Sicilian, Dragon, Classical",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","f1e2","f8g7","c1e3"]
+},
+{
+  "eco": "B75",
+  "name": "Sicilian, Dragon, Yugoslav Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","c1e3","f8g7","f2f3"]
+},
+{
+  "eco": "B76",
+  "name": "Sicilian, Dragon, Yugoslav Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","c1e3","f8g7","f2f3","e8g8"]
+},
+{
+  "eco": "B77",
+  "name": "Sicilian, Dragon, Yugoslav Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","c1e3","f8g7","f2f3","e8g8","d1d2"]
+},
+{
+  "eco": "B78",
+  "name": "Sicilian, Dragon, Yugoslav Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","c1e3","f8g7","f2f3","e8g8","d1d2","b8c6"]
+},
+{
+  "eco": "B79",
+  "name": "Sicilian, Dragon, Yugoslav Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","g7g6","c1e3","f8g7","f2f3","e8g8","d1d2","b8c6","e1c1"]
+},
+
+{
+  "eco": "B80",
+  "name": "Sicilian, Scheveningen",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6"]
+},
+{
+  "eco": "B81",
+  "name": "Sicilian, Scheveningen",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","c1g5"]
+},
+{
+  "eco": "B82",
+  "name": "Sicilian, Scheveningen",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","f1e2"]
+},
+{
+  "eco": "B83",
+  "name": "Sicilian, Scheveningen",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","f1e2","f8e7"]
+},
+{
+  "eco": "B84",
+  "name": "Sicilian, Scheveningen",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","f1e2","f8e7","e1g1"]
+},
+{
+  "eco": "B85",
+  "name": "Sicilian, Scheveningen, Classical",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","f1e2","f8e7","e1g1","e8g8"]
+},
+{
+  "eco": "B86",
+  "name": "Sicilian, Fischer-Sozin Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","c1e3"]
+},
+{
+  "eco": "B87",
+  "name": "Sicilian, Fischer-Sozin Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","c1e3","f8e7"]
+},
+{
+  "eco": "B88",
+  "name": "Sicilian, Fischer-Sozin Attack",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","c1e3","f8e7","f1c4"]
+},
+{
+  "eco": "B89",
+  "name": "Sicilian, Fischer-Sozin Attack, Main line",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","e7e6","c1e3","f8e7","f1c4","e8g8"]
+},
+{
+  "eco": "B90",
+  "name": "Sicilian, Najdorf",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6"]
+},
+{
+  "eco": "B91",
+  "name": "Sicilian, Najdorf, Zagreb (Byrne) Variation",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","f1c4"]
+},
+{
+  "eco": "B92",
+  "name": "Sicilian, Najdorf, Opocensky Variation",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1e3"]
+},
+{
+  "eco": "B93",
+  "name": "Sicilian, Najdorf, 6.f4",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","f2f4"]
+},
+{
+  "eco": "B94",
+  "name": "Sicilian, Najdorf, 6.Bg5",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5"]
+},
+{
+  "eco": "B95",
+  "name": "Sicilian, Najdorf, 6.Bg5",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5","e7e6"]
+},
+{
+  "eco": "B96",
+  "name": "Sicilian, Najdorf, 6.Bg5",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5","e7e6","f1e2"]
+},
+{
+  "eco": "B97",
+  "name": "Sicilian, Najdorf, Poisoned Pawn",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5","e7e6","d1d2","b7b5","c3b5"]
+},
+{
+  "eco": "B98",
+  "name": "Sicilian, Najdorf, 7.f4",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5","e7e6","f2f4"]
+},
+{
+  "eco": "B99",
+  "name": "Sicilian, Najdorf, Main line",
+  "moves": ["e2e4","c7c5","g1f3","d7d6","d2d4","c5d4","f3d4","g8f6","b1c3","a7a6","c1g5","e7e6","f2f4","b8c6"]
+},
+{
+  "eco": "C00",
+  "name": "French Defense",
+  "moves": ["e2e4","e7e6"]
+},
+{
+  "eco": "C01",
+  "name": "French, Exchange Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","e4d5"]
+},
+{
+  "eco": "C02",
+  "name": "French, Advance Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","e4e5"]
+},
+{
+  "eco": "C03",
+  "name": "French, Tarrasch",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2"]
+},
+{
+  "eco": "C04",
+  "name": "French, Tarrasch",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","g8f6"]
+},
+{
+  "eco": "C05",
+  "name": "French, Tarrasch",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","c7c5"]
+},
+{
+  "eco": "C06",
+  "name": "French, Tarrasch",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","c7c5","g1f3"]
+},
+{
+  "eco": "C07",
+  "name": "French, Tarrasch, Open Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","c7c5","g1f3","g8f6"]
+},
+{
+  "eco": "C08",
+  "name": "French, Tarrasch, Open Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","c7c5","g1f3","g8f6","e4d5"]
+},
+{
+  "eco": "C09",
+  "name": "French, Tarrasch, Open Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1d2","c7c5","g1f3","g8f6","e4d5","e6d5"]
+},
+{
+  "eco": "C10",
+  "name": "French Defense",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3"]
+},
+{
+  "eco": "C11",
+  "name": "French Defense",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","g8f6"]
+},
+{
+  "eco": "C12",
+  "name": "French, MacCutcheon",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","g8f6","c1g5","f8b4"]
+},
+{
+  "eco": "C13",
+  "name": "French, Classical",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","g8f6","c1g5","f8e7"]
+},
+{
+  "eco": "C14",
+  "name": "French, Classical",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","g8f6","c1g5","f8e7","e4e5"]
+},
+{
+  "eco": "C15",
+  "name": "French, Winawer",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","f8b4"]
+},
+{
+  "eco": "C16",
+  "name": "French, Winawer",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","f8b4","e4e5"]
+},
+{
+  "eco": "C17",
+  "name": "French, Winawer",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","f8b4","e4e5","c7c5"]
+},
+{
+  "eco": "C18",
+  "name": "French, Winawer",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","f8b4","e4e5","c7c5","a2a3"]
+},
+{
+  "eco": "C19",
+  "name": "French, Winawer, Advance Variation",
+  "moves": ["e2e4","e7e6","d2d4","d7d5","b1c3","f8b4","e4e5","c7c5","a2a3","b4c3","b2c3"]
+},
+
+{
+  "eco": "C20",
+  "name": "King's Pawn Game",
+  "moves": ["e2e4","e7e5"]
+},
+{
+  "eco": "C21",
+  "name": "Center Game",
+  "moves": ["e2e4","e7e5","d2d4"]
+},
+{
+  "eco": "C22",
+  "name": "Center Game",
+  "moves": ["e2e4","e7e5","d2d4","e5d4"]
+},
+{
+  "eco": "C23",
+  "name": "Bishop's Opening",
+  "moves": ["e2e4","e7e5","f1c4"]
+},
+{
+  "eco": "C24",
+  "name": "Bishop's Opening",
+  "moves": ["e2e4","e7e5","f1c4","g8f6"]
+},
+{
+  "eco": "C25",
+  "name": "Vienna Game",
+  "moves": ["e2e4","e7e5","b1c3"]
+},
+{
+  "eco": "C26",
+  "name": "Vienna Game",
+  "moves": ["e2e4","e7e5","b1c3","g8f6"]
+},
+{
+  "eco": "C27",
+  "name": "Vienna Game",
+  "moves": ["e2e4","e7e5","b1c3","f8c5"]
+},
+{
+  "eco": "C28",
+  "name": "Vienna Gambit",
+  "moves": ["e2e4","e7e5","b1c3","f8c5","f2f4"]
+},
+{
+  "eco": "C29",
+  "name": "Vienna Gambit, Hamppe-Allgaier Gambit",
+  "moves": ["e2e4","e7e5","b1c3","f8c5","f2f4","e5f4","g1f3","g8f6"]
+},
+
+{
+  "eco": "C30",
+  "name": "King's Gambit",
+  "moves": ["e2e4","e7e5","f2f4"]
+},
+{
+  "eco": "C31",
+  "name": "King's Gambit Declined",
+  "moves": ["e2e4","e7e5","f2f4","d7d5"]
+},
+{
+  "eco": "C32",
+  "name": "King's Gambit Declined, Falkbeer Countergambit",
+  "moves": ["e2e4","e7e5","f2f4","d7d5","e4d5"]
+},
+{
+  "eco": "C33",
+  "name": "King's Gambit Accepted",
+  "moves": ["e2e4","e7e5","f2f4","e5f4"]
+},
+{
+  "eco": "C34",
+  "name": "King's Gambit Accepted",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3"]
+},
+{
+  "eco": "C35",
+  "name": "King's Gambit Accepted, Cunningham Defense",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3","f8e7"]
+},
+{
+  "eco": "C36",
+  "name": "King's Gambit Accepted, Abbazia Defense",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3","d7d5"]
+},
+{
+  "eco": "C37",
+  "name": "King's Gambit Accepted",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3","g7g5"]
+},
+{
+  "eco": "C38",
+  "name": "King's Gambit Accepted, Hanstein Gambit",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3","g7g5","f1c4"]
+},
+{
+  "eco": "C39",
+  "name": "King's Gambit Accepted, Kieseritzky Gambit",
+  "moves": ["e2e4","e7e5","f2f4","e5f4","g1f3","g7g5","h2h4"]
+},
+{
+  "eco": "C40",
+  "name": "King's Knight Opening",
+  "moves": ["e2e4","e7e5","g1f3"]
+},
+{
+  "eco": "C41",
+  "name": "Philidor Defense",
+  "moves": ["e2e4","e7e5","g1f3","d7d6"]
+},
+{
+  "eco": "C42",
+  "name": "Petrov Defense",
+  "moves": ["e2e4","e7e5","g1f3","g8f6"]
+},
+{
+  "eco": "C43",
+  "name": "Petrov, Modern Attack",
+  "moves": ["e2e4","e7e5","g1f3","g8f6","d2d4"]
+},
+{
+  "eco": "C44",
+  "name": "King's Pawn Game",
+  "moves": ["e2e4","e7e5","g1f3","b8c6"]
+},
+{
+  "eco": "C45",
+  "name": "Scotch Game",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","d2d4"]
+},
+{
+  "eco": "C46",
+  "name": "Three Knights Game",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","b1c3"]
+},
+{
+  "eco": "C47",
+  "name": "Four Knights Game",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","b1c3","g8f6"]
+},
+{
+  "eco": "C48",
+  "name": "Four Knights, Spanish Variation",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","b1c3","g8f6","f1b5"]
+},
+{
+  "eco": "C49",
+  "name": "Four Knights, Double Ruy Lopez",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","b1c3","g8f6","f1b5","f8b4"]
+},
+{
+  "eco": "C50",
+  "name": "Italian Game",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4"]
+},
+{
+  "eco": "C51",
+  "name": "Evans Gambit Declined",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","f8c5","b2b4","c5b6"]
+},
+{
+  "eco": "C52",
+  "name": "Evans Gambit",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","f8c5","b2b4"]
+},
+{
+  "eco": "C53",
+  "name": "Giuoco Piano",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","f8c5"]
+},
+{
+  "eco": "C54",
+  "name": "Giuoco Piano",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","f8c5","c2c3"]
+},
+{
+  "eco": "C55",
+  "name": "Two Knights Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","g8f6"]
+},
+{
+  "eco": "C56",
+  "name": "Two Knights Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","g8f6","d2d4"]
+},
+{
+  "eco": "C57",
+  "name": "Two Knights Defense, Fried Liver Attack",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","g8f6","d2d4","e5d4","f3g5"]
+},
+{
+  "eco": "C58",
+  "name": "Two Knights Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","g8f6","d2d4","e5d4","e4e5"]
+},
+{
+  "eco": "C59",
+  "name": "Two Knights Defense, Ponziani-Steinitz Gambit",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1c4","g8f6","d2d4","e5d4","e4e5","f6e4"]
+},
+
+{
+  "eco": "C60",
+  "name": "Ruy Lopez",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5"]
+},
+{
+  "eco": "C61",
+  "name": "Ruy Lopez, Bird Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","d7d6"]
+},
+{
+  "eco": "C62",
+  "name": "Ruy Lopez, Old Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","d7d6","c2c3"]
+},
+{
+  "eco": "C63",
+  "name": "Ruy Lopez, Schliemann Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","f7f5"]
+},
+{
+  "eco": "C64",
+  "name": "Ruy Lopez, Classical",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","f8c5"]
+},
+{
+  "eco": "C65",
+  "name": "Ruy Lopez, Berlin Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","g8f6"]
+},
+{
+  "eco": "C66",
+  "name": "Ruy Lopez, Berlin Defense, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","g8f6","d2d3"]
+},
+{
+  "eco": "C67",
+  "name": "Ruy Lopez, Berlin Defense, Open",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","g8f6","e1g1","f6e4"]
+},
+{
+  "eco": "C68",
+  "name": "Ruy Lopez, Exchange Variation",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5c6"]
+},
+{
+  "eco": "C69",
+  "name": "Ruy Lopez, Exchange Variation, 5.O-O",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5c6","d7c6","e1g1"]
+},
+{
+  "eco": "C70",
+  "name": "Ruy Lopez",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6"]
+},
+{
+  "eco": "C71",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6"]
+},
+{
+  "eco": "C72",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6","c2c3"]
+},
+{
+  "eco": "C73",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6","c2c3","g8f6"]
+},
+{
+  "eco": "C74",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6","c2c3","g8f6","d2d4"]
+},
+{
+  "eco": "C75",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6","c2c3","g8f6","d2d4","b7b5"]
+},
+{
+  "eco": "C76",
+  "name": "Ruy Lopez, Modern Steinitz Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","d7d6","c2c3","g8f6","d2d4","b7b5","a4b3"]
+},
+{
+  "eco": "C77",
+  "name": "Ruy Lopez, Morphy Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","g8f6"]
+},
+{
+  "eco": "C78",
+  "name": "Ruy Lopez, Archangel Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8c5"]
+},
+{
+  "eco": "C79",
+  "name": "Ruy Lopez, Archangel Defense, Modern Line",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8c5","c2c3"]
+},
+
+{
+  "eco": "C80",
+  "name": "Ruy Lopez, Open",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","g8f6","e1g1","f6e4"]
+},
+{
+  "eco": "C81",
+  "name": "Ruy Lopez, Open",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","g8f6","e1g1","f6e4","d2d4"]
+},
+{
+  "eco": "C82",
+  "name": "Ruy Lopez, Open",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","g8f6","e1g1","f6e4","d2d4","b7b5"]
+},
+{
+  "eco": "C83",
+  "name": "Ruy Lopez, Open",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","g8f6","e1g1","f6e4","d2d4","b7b5","a4b3"]
+},
+{
+  "eco": "C84",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7"]
+},
+{
+  "eco": "C85",
+  "name": "Ruy Lopez, Exchange Variation Deferred",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","b5c6"]
+},
+{
+  "eco": "C86",
+  "name": "Ruy Lopez, Worrall Attack",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","d2d3"]
+},
+{
+  "eco": "C87",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1"]
+},
+{
+  "eco": "C88",
+  "name": "Ruy Lopez, Closed, 7…d6",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","d7d6"]
+},
+{
+  "eco": "C89",
+  "name": "Ruy Lopez, Marshall Attack",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d5"]
+},
+
+{
+  "eco": "C90",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6"]
+},
+{
+  "eco": "C91",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3"]
+},
+{
+  "eco": "C92",
+  "name": "Ruy Lopez, Closed, 9.h3",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3"]
+},
+{
+  "eco": "C93",
+  "name": "Ruy Lopez, Closed, Smyslov Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c8b7"]
+},
+{
+  "eco": "C94",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c6a5"]
+},
+{
+  "eco": "C95",
+  "name": "Ruy Lopez, Closed, Breyer Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","b8d7"]
+},
+{
+  "eco": "C96",
+  "name": "Ruy Lopez, Closed",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c8b7"]
+},
+{
+  "eco": "C97",
+  "name": "Ruy Lopez, Closed, Chigorin Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c8b7","d2d4"]
+},
+{
+  "eco": "C98",
+  "name": "Ruy Lopez, Closed, Chigorin Defense",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c8b7","d2d4","f6d7"]
+},
+{
+  "eco": "C99",
+  "name": "Ruy Lopez, Closed, Chigorin Defense, 12.c3",
+  "moves": ["e2e4","e7e5","g1f3","b8c6","f1b5","a7a6","b5a4","f8e7","e1g1","b7b5","a4b3","d7d6","c2c3","e8g8","h2h3","c8b7","d2d4","f6d7","c1e3","c6a5","b3c2","c7c5","c2c3"]
+},
+
+{
+  "eco": "D00",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","d7d5"]
+},
+{
+  "eco": "D01",
+  "name": "Richter-Veresov Attack",
+  "moves": ["d2d4","d7d5","b1c3"]
+},
+{
+  "eco": "D02",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1f4"]
+},
+{
+  "eco": "D03",
+  "name": "Torre Attack",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1g5"]
+},
+{
+  "eco": "D04",
+  "name": "Queen's Pawn Game, Colle System",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","e2e3"]
+},
+{
+  "eco": "D05",
+  "name": "Queen's Pawn Game, Zukertort Variation",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","e2e3","c8f5"]
+},
+{
+  "eco": "D06",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4"]
+},
+{
+  "eco": "D07",
+  "name": "Queen's Gambit Declined, Chigorin Defense",
+  "moves": ["d2d4","d7d5","c2c4","b8c6"]
+},
+{
+  "eco": "D08",
+  "name": "Queen's Gambit Declined, Albin Countergambit",
+  "moves": ["d2d4","d7d5","c2c4","e7e5"]
+},
+{
+  "eco": "D09",
+  "name": "Queen's Gambit Declined, Albin Countergambit, Lasker Trap",
+  "moves": ["d2d4","d7d5","c2c4","e7e5","d4e5","d5d4","g1f3","b8c6"]
+},
+
+{
+  "eco": "D10",
+  "name": "Slav Defense",
+  "moves": ["d2d4","d7d5","c2c4","c7c6"]
+},
+{
+  "eco": "D11",
+  "name": "Slav Defense",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3"]
+},
+{
+  "eco": "D12",
+  "name": "Slav Defense",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6"]
+},
+{
+  "eco": "D13",
+  "name": "Slav Defense, Exchange Variation",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","c4d5"]
+},
+{
+  "eco": "D14",
+  "name": "Slav Defense, Exchange Variation",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","c4d5","c6d5"]
+},
+{
+  "eco": "D15",
+  "name": "Slav Defense",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6","b1c3"]
+},
+{
+  "eco": "D16",
+  "name": "Slav Defense, Alapin Variation",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6","b1c3","d5c4"]
+},
+{
+  "eco": "D17",
+  "name": "Slav Defense, Czech Variation",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6","b1c3","d5c4","a2a4"]
+},
+{
+  "eco": "D18",
+  "name": "Slav Defense, Czech Variation",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6","b1c3","d5c4","a2a4","c8f5"]
+},
+{
+  "eco": "D19",
+  "name": "Slav Defense, Czech Variation, Classical",
+  "moves": ["d2d4","d7d5","c2c4","c7c6","g1f3","g8f6","b1c3","d5c4","a2a4","c8f5","e2e3"]
+},
+
+{
+  "eco": "D20",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4"]
+},
+{
+  "eco": "D21",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3"]
+},
+{
+  "eco": "D22",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6"]
+},
+{
+  "eco": "D23",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3"]
+},
+{
+  "eco": "D24",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","c7c5"]
+},
+{
+  "eco": "D25",
+  "name": "Queen's Gambit Accepted, Janowski Variation",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","c7c5","f1c4"]
+},
+{
+  "eco": "D26",
+  "name": "Queen's Gambit Accepted",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","c7c5","f1c4","e7e6"]
+},
+{
+  "eco": "D27",
+  "name": "Queen's Gambit Accepted, Classical",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","e7e6"]
+},
+{
+  "eco": "D28",
+  "name": "Queen's Gambit Accepted, Classical",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","e7e6","f1c4"]
+},
+{
+  "eco": "D29",
+  "name": "Queen's Gambit Accepted, Classical, 7.Nc3",
+  "moves": ["d2d4","d7d5","c2c4","d5c4","g1f3","g8f6","e2e3","e7e6","f1c4","c7c5","b1c3"]
+},
+
+{
+  "eco": "D30",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4","e7e6"]
+},
+{
+  "eco": "D31",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3"]
+},
+{
+  "eco": "D32",
+  "name": "Queen's Gambit Declined, Tarrasch Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c5"]
+},
+{
+  "eco": "D33",
+  "name": "Queen's Gambit Declined, Tarrasch Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c5","c4d5"]
+},
+{
+  "eco": "D34",
+  "name": "Queen's Gambit Declined, Tarrasch Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c5","c4d5","e6d5"]
+},
+{
+  "eco": "D35",
+  "name": "Queen's Gambit Declined, Exchange Variation",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","c4d5","e6d5"]
+},
+{
+  "eco": "D36",
+  "name": "Queen's Gambit Declined, Exchange Variation",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","c4d5","e6d5","g1f3"]
+},
+{
+  "eco": "D37",
+  "name": "Queen's Gambit Declined, Classical",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","c1g5"]
+},
+{
+  "eco": "D38",
+  "name": "Queen's Gambit Declined, Ragozin Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","c1g5","f8b4"]
+},
+{
+  "eco": "D39",
+  "name": "Queen's Gambit Declined, Ragozin Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","c1g5","f8b4","e2e3"]
+},
+{
+  "eco": "D40",
+  "name": "Queen's Gambit Declined, Semi-Tarrasch",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","g1f3","c7c5"]
+},
+{
+  "eco": "D41",
+  "name": "Queen's Gambit Declined, Semi-Tarrasch",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","g1f3","c7c5","c4d5"]
+},
+{
+  "eco": "D42",
+  "name": "Queen's Gambit Declined, Semi-Tarrasch",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","g8f6","g1f3","c7c5","c4d5","f6d5"]
+},
+{
+  "eco": "D43",
+  "name": "Queen's Gambit Declined, Semi-Slav",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6"]
+},
+{
+  "eco": "D44",
+  "name": "Queen's Gambit Declined, Semi-Slav",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3"]
+},
+{
+  "eco": "D45",
+  "name": "Queen's Gambit Declined, Semi-Slav",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3","g8f6"]
+},
+{
+  "eco": "D46",
+  "name": "Queen's Gambit Declined, Semi-Slav",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3","g8f6","e2e3"]
+},
+{
+  "eco": "D47",
+  "name": "Queen's Gambit Declined, Semi-Slav, Meran",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3","g8f6","e2e3","b8d7"]
+},
+{
+  "eco": "D48",
+  "name": "Queen's Gambit Declined, Semi-Slav, Meran",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3","g8f6","e2e3","b8d7","f1d3"]
+},
+{
+  "eco": "D49",
+  "name": "Queen's Gambit Declined, Semi-Slav, Meran",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","b1c3","c7c6","g1f3","g8f6","e2e3","b8d7","f1d3","d5c4"]
+},
+
+{
+  "eco": "D50",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3"]
+},
+{
+  "eco": "D51",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7"]
+},
+{
+  "eco": "D52",
+  "name": "Queen's Gambit Declined, Cambridge Springs",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","b8d7","d1c2","c7c6","c3d5","e6d5","c4d5","f6d5"]
+},
+{
+  "eco": "D53",
+  "name": "Queen's Gambit Declined",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5"]
+},
+{
+  "eco": "D54",
+  "name": "Queen's Gambit Declined, Anti-Neo-Orthodox",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6"]
+},
+{
+  "eco": "D55",
+  "name": "Queen's Gambit Declined, Neo-Orthodox",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6","g5h4"]
+},
+{
+  "eco": "D56",
+  "name": "Queen's Gambit Declined, Lasker Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6","g5h4","e8g8"]
+},
+{
+  "eco": "D57",
+  "name": "Queen's Gambit Declined, Lasker Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6","g5h4","e8g8","e2e3"]
+},
+{
+  "eco": "D58",
+  "name": "Queen's Gambit Declined, Tartakower Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6","g5h4","b7b6"]
+},
+{
+  "eco": "D59",
+  "name": "Queen's Gambit Declined, Tartakower Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","b1c3","f8e7","c1g5","h7h6","g5h4","b7b6","e2e3"]
+},
+
+{
+  "eco": "D60",
+  "name": "Queen's Gambit Declined, Orthodox Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5"]
+},
+{
+  "eco": "D61",
+  "name": "Queen's Gambit Declined, Orthodox Defense",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7"]
+},
+{
+  "eco": "D62",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Rubinstein",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3"]
+},
+{
+  "eco": "D63",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Rubinstein",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8"]
+},
+{
+  "eco": "D64",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Rubinstein",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","a2a3"]
+},
+{
+  "eco": "D65",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Rubinstein",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","a2a3","b8d7"]
+},
+{
+  "eco": "D66",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Capablanca Variation",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","b1c3"]
+},
+{
+  "eco": "D67",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Capablanca Variation",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","b1c3","b8d7"]
+},
+{
+  "eco": "D68",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Classical",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","b1c3","b8d7","a1c1"]
+},
+{
+  "eco": "D69",
+  "name": "Queen's Gambit Declined, Orthodox Defense, Classical",
+  "moves": ["d2d4","d7d5","c2c4","e7e6","g1f3","g8f6","c1g5","f8e7","e2e3","e8g8","b1c3","b8d7","a1c1","c7c6"]
+},
+
+{
+  "eco": "D70",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5"]
+},
+{
+  "eco": "D71",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5"]
+},
+{
+  "eco": "D72",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5"]
+},
+{
+  "eco": "D73",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4"]
+},
+{
+  "eco": "D74",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3"]
+},
+{
+  "eco": "D75",
+  "name": "Neo-Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3"]
+},
+{
+  "eco": "D76",
+  "name": "Neo-Grünfeld Defense, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3"]
+},
+{
+  "eco": "D77",
+  "name": "Neo-Grünfeld Defense, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7"]
+},
+{
+  "eco": "D78",
+  "name": "Neo-Grünfeld Defense, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7","c1g5"]
+},
+{
+  "eco": "D79",
+  "name": "Neo-Grünfeld Defense, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7","c1g5","d5c4"]
+},
+
+{
+  "eco": "D80",
+  "name": "Grünfeld Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5"]
+},
+{
+  "eco": "D81",
+  "name": "Grünfeld Defense, Russian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5"]
+},
+{
+  "eco": "D82",
+  "name": "Grünfeld Defense, Russian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5"]
+},
+{
+  "eco": "D83",
+  "name": "Grünfeld Defense, Russian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4"]
+},
+{
+  "eco": "D84",
+  "name": "Grünfeld Defense, Russian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3"]
+},
+{
+  "eco": "D85",
+  "name": "Grünfeld Defense, Exchange Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3"]
+},
+{
+  "eco": "D86",
+  "name": "Grünfeld Defense, Exchange Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3","f8g7"]
+},
+{
+  "eco": "D87",
+  "name": "Grünfeld Defense, Exchange Variation, Spassky Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3","f8g7","c1e3"]
+},
+{
+  "eco": "D88",
+  "name": "Grünfeld Defense, Exchange Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3","f8g7","f1c4"]
+},
+{
+  "eco": "D89",
+  "name": "Grünfeld Defense, Exchange Variation, Simagin Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","c4d5","f6d5","e2e4","d5c3","b2c3","f8g7","f1c4","c7c5"]
+},
+
+{
+  "eco": "D90",
+  "name": "Grünfeld Defense, Three Knights Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3"]
+},
+{
+  "eco": "D91",
+  "name": "Grünfeld Defense, Three Knights Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7"]
+},
+{
+  "eco": "D92",
+  "name": "Grünfeld Defense, Three Knights Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7","c1g5"]
+},
+{
+  "eco": "D93",
+  "name": "Grünfeld Defense, Three Knights Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","d7d5","g1f3","f8g7","c1g5","d5c4"]
+},
+{
+  "eco": "D94",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3"]
+},
+{
+  "eco": "D95",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7"]
+},
+{
+  "eco": "D96",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2"]
+},
+{
+  "eco": "D97",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d5"]
+},
+{
+  "eco": "D98",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d5","c4d5"]
+},
+{
+  "eco": "D99",
+  "name": "Grünfeld Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d5","c4d5","f6d5"]
+},
+
+{
+  "eco": "E00",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","g8f6"]
+},
+{
+  "eco": "E01",
+  "name": "Catalan Opening",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3"]
+},
+{
+  "eco": "E02",
+  "name": "Catalan Opening, Closed",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5"]
+},
+{
+  "eco": "E03",
+  "name": "Catalan Opening, Closed",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2"]
+},
+{
+  "eco": "E04",
+  "name": "Catalan Opening, Open",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","d5c4"]
+},
+{
+  "eco": "E05",
+  "name": "Catalan Opening, Open",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","d5c4","g1f3"]
+},
+{
+  "eco": "E06",
+  "name": "Catalan Opening, Closed",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","f8e7"]
+},
+{
+  "eco": "E07",
+  "name": "Catalan Opening, Closed",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","f8e7","g1f3"]
+},
+{
+  "eco": "E08",
+  "name": "Catalan Opening, Closed",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","f8e7","g1f3","e8g8"]
+},
+{
+  "eco": "E09",
+  "name": "Catalan Opening, Closed, Main Line",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g2g3","d7d5","f1g2","f8e7","g1f3","e8g8","e1g1","d5c4"]
+},
+
+{
+  "eco": "E10",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","g8f6","c2c4","e7e6"]
+},
+{
+  "eco": "E11",
+  "name": "Bogo-Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4"]
+},
+{
+  "eco": "E12",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6"]
+},
+{
+  "eco": "E13",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3"]
+},
+{
+  "eco": "E14",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7"]
+},
+{
+  "eco": "E15",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7","f1g2"]
+},
+{
+  "eco": "E16",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7","f1g2","f8e7"]
+},
+{
+  "eco": "E17",
+  "name": "Queen's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7","f1g2","f8e7","e1g1"]
+},
+{
+  "eco": "E18",
+  "name": "Queen's Indian Defense, Old Main Line",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7","f1g2","f8e7","e1g1","e8g8"]
+},
+{
+  "eco": "E19",
+  "name": "Queen's Indian Defense, Old Main Line",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","b7b6","g2g3","c8b7","f1g2","f8e7","e1g1","e8g8","b1c3"]
+},
+
+{
+  "eco": "E20",
+  "name": "Nimzo-Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4"]
+},
+{
+  "eco": "E21",
+  "name": "Nimzo-Indian Defense, Three Knights Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","g1f3"]
+},
+{
+  "eco": "E22",
+  "name": "Nimzo-Indian Defense, Spielmann Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","a2a3"]
+},
+{
+  "eco": "E23",
+  "name": "Nimzo-Indian Defense, Spielmann Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","a2a3","b4c3"]
+},
+{
+  "eco": "E24",
+  "name": "Nimzo-Indian Defense, Spielmann Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","a2a3","b4c3","b2c3"]
+},
+{
+  "eco": "E25",
+  "name": "Nimzo-Indian Defense, Saemisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1d2"]
+},
+{
+  "eco": "E26",
+  "name": "Nimzo-Indian Defense, Saemisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1d2","d7d5"]
+},
+{
+  "eco": "E27",
+  "name": "Nimzo-Indian Defense, Saemisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1d2","d7d5","a2a3"]
+},
+{
+  "eco": "E28",
+  "name": "Nimzo-Indian Defense, Saemisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1d2","d7d5","a2a3","b4c3"]
+},
+{
+  "eco": "E29",
+  "name": "Nimzo-Indian Defense, Saemisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1d2","d7d5","a2a3","b4c3","b2c3"]
+},
+
+{
+  "eco": "E30",
+  "name": "Nimzo-Indian Defense, Leningrad Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","g2g3"]
+},
+{
+  "eco": "E31",
+  "name": "Nimzo-Indian Defense, Leningrad Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","g2g3","c7c5"]
+},
+{
+  "eco": "E32",
+  "name": "Nimzo-Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1g5"]
+},
+{
+  "eco": "E33",
+  "name": "Nimzo-Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1g5","h7h6"]
+},
+{
+  "eco": "E34",
+  "name": "Nimzo-Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1g5","h7h6","g5h4"]
+},
+{
+  "eco": "E35",
+  "name": "Nimzo-Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1g5","h7h6","g5h4","c7c5"]
+},
+{
+  "eco": "E36",
+  "name": "Nimzo-Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","c1g5","h7h6","g5h4","c7c5","e2e3"]
+},
+{
+  "eco": "E37",
+  "name": "Nimzo-Indian Defense, Classical, 4.Qc2",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","d1c2"]
+},
+{
+  "eco": "E38",
+  "name": "Nimzo-Indian Defense, Classical, 4.Qc2",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","d1c2","b8c6"]
+},
+{
+  "eco": "E39",
+  "name": "Nimzo-Indian Defense, Classical, 4.Qc2",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","d1c2","b8c6","a2a3"]
+},
+
+{
+  "eco": "E40",
+  "name": "Nimzo-Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4"]
+},
+{
+  "eco": "E41",
+  "name": "Nimzo-Indian Defense, Hübner Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","d1c2"]
+},
+{
+  "eco": "E42",
+  "name": "Nimzo-Indian Defense, Hübner Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","d1c2","c7c5"]
+},
+{
+  "eco": "E43",
+  "name": "Nimzo-Indian Defense, Fischer Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","d1c2","b8c6"]
+},
+{
+  "eco": "E44",
+  "name": "Nimzo-Indian Defense, Fischer Variation",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","d1c2","b8c6","a2a3"]
+},
+{
+  "eco": "E45",
+  "name": "Nimzo-Indian Defense, 4.e3",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","e2e3"]
+},
+{
+  "eco": "E46",
+  "name": "Nimzo-Indian Defense, 4.e3",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","e2e3","e8g8"]
+},
+{
+  "eco": "E47",
+  "name": "Nimzo-Indian Defense, 4.e3, 0–0",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","e2e3","e8g8","f1d3"]
+},
+{
+  "eco": "E48",
+  "name": "Nimzo-Indian Defense, 4.e3, 0–0",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","e2e3","e8g8","f1d3","d7d5"]
+},
+{
+  "eco": "E49",
+  "name": "Nimzo-Indian Defense, 4.e3, 0–0, 5.Bd3 d5",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","g1f3","f8b4","e2e3","e8g8","f1d3","d7d5","e1g1"]
+},
+
+{
+  "eco": "E50",
+  "name": "Nimzo-Indian Defense, 4.e3",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3"]
+},
+{
+  "eco": "E51",
+  "name": "Nimzo-Indian Defense, 4.e3",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8"]
+},
+{
+  "eco": "E52",
+  "name": "Nimzo-Indian Defense, 4.e3, 0–0",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3"]
+},
+{
+  "eco": "E53",
+  "name": "Nimzo-Indian Defense, 4.e3, 0–0",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5"]
+},
+{
+  "eco": "E54",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3"]
+},
+{
+  "eco": "E55",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3","c7c5"]
+},
+{
+  "eco": "E56",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3","c7c5","e1g1"]
+},
+{
+  "eco": "E57",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3","c7c5","e1g1","b8c6"]
+},
+{
+  "eco": "E58",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3","c7c5","e1g1","b8c6","a2a3"]
+},
+{
+  "eco": "E59",
+  "name": "Nimzo-Indian Defense, 4.e3, Gligoric System",
+  "moves": ["d2d4","g8f6","c2c4","e7e6","b1c3","f8b4","e2e3","e8g8","f1d3","d7d5","g1f3","c7c5","e1g1","b8c6","a2a3","b4c3"]
+},
+{
+  "eco": "E60",
+  "name": "King's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6"]
+},
+{
+  "eco": "E61",
+  "name": "King's Indian Defense, 3.Nc3",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3"]
+},
+{
+  "eco": "E62",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3"]
+},
+{
+  "eco": "E63",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7"]
+},
+{
+  "eco": "E64",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2"]
+},
+{
+  "eco": "E65",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d6"]
+},
+{
+  "eco": "E66",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d6","g1f3"]
+},
+{
+  "eco": "E67",
+  "name": "King's Indian Defense, Fianchetto Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d6","g1f3","e8g8"]
+},
+{
+  "eco": "E68",
+  "name": "King's Indian Defense, Fianchetto Variation, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d6","g1f3","e8g8","e1g1"]
+},
+{
+  "eco": "E69",
+  "name": "King's Indian Defense, Fianchetto Variation, Classical",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","g2g3","f8g7","f1g2","d7d6","g1f3","e8g8","e1g1","c7c6"]
+},
+{
+  "eco": "E70",
+  "name": "King's Indian Defense",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7"]
+},
+{
+  "eco": "E71",
+  "name": "King's Indian Defense, Normal Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4"]
+},
+{
+  "eco": "E72",
+  "name": "King's Indian Defense, Normal Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6"]
+},
+{
+  "eco": "E73",
+  "name": "King's Indian Defense, Normal Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3"]
+},
+{
+  "eco": "E74",
+  "name": "King's Indian Defense, Averbakh Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","c1g5"]
+},
+{
+  "eco": "E75",
+  "name": "King's Indian Defense, Averbakh Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","c1g5","e8g8"]
+},
+{
+  "eco": "E76",
+  "name": "King's Indian Defense, Four Pawns Attack",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f4"]
+},
+{
+  "eco": "E77",
+  "name": "King's Indian Defense, Four Pawns Attack",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f4","e8g8"]
+},
+{
+  "eco": "E78",
+  "name": "King's Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8"]
+},
+{
+  "eco": "E79",
+  "name": "King's Indian Defense, Classical, 7…Nc6",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","b8c6"]
+},
+{
+  "eco": "E80",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3"]
+},
+{
+  "eco": "E81",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8"]
+},
+{
+  "eco": "E82",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3"]
+},
+{
+  "eco": "E83",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","c7c5"]
+},
+{
+  "eco": "E84",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","c7c5","d4d5"]
+},
+{
+  "eco": "E85",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","c7c5","d4d5","e7e6"]
+},
+{
+  "eco": "E86",
+  "name": "King's Indian Defense, Sämisch Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","c7c5","d4d5","e7e6","g1e2"]
+},
+{
+  "eco": "E87",
+  "name": "King's Indian Defense, Sämisch Variation, Panno",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","b8c6"]
+},
+{
+  "eco": "E88",
+  "name": "King's Indian Defense, Sämisch Variation, Panno",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","b8c6","g1e2"]
+},
+{
+  "eco": "E89",
+  "name": "King's Indian Defense, Sämisch Variation, Panno",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","f2f3","e8g8","c1e3","b8c6","g1e2","a7a6"]
+},
+{
+  "eco": "E90",
+  "name": "King's Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2"]
+},
+{
+  "eco": "E91",
+  "name": "King's Indian Defense, Classical Variation",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5"]
+},
+{
+  "eco": "E92",
+  "name": "King's Indian Defense, Classical, 7…e5",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","e1g1"]
+},
+{
+  "eco": "E93",
+  "name": "King's Indian Defense, Classical, Petrosian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","d4d5"]
+},
+{
+  "eco": "E94",
+  "name": "King's Indian Defense, Classical, Petrosian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","d4d5","b8d7"]
+},
+{
+  "eco": "E95",
+  "name": "King's Indian Defense, Classical, Petrosian System",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","d4d5","b8d7","f3d2"]
+},
+{
+  "eco": "E96",
+  "name": "King's Indian Defense, Classical, Orthodox",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","e1g1","b8d7"]
+},
+{
+  "eco": "E97",
+  "name": "King's Indian Defense, Classical, Orthodox",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","e1g1","b8d7","c1g5"]
+},
+{
+  "eco": "E98",
+  "name": "King's Indian Defense, Classical, Orthodox, Aronin–Taimanov",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","e1g1","b8d7","c1g5","c7c6"]
+},
+{
+  "eco": "E99",
+  "name": "King's Indian Defense, Classical, Orthodox, Aronin–Taimanov",
+  "moves": ["d2d4","g8f6","c2c4","g7g6","b1c3","f8g7","e2e4","d7d6","g1f3","e8g8","f1e2","e7e5","e1g1","b8d7","c1g5","c7c6","d1d2"]
+},
+
+{
+  "eco": "F00",
+  "name": "Irregular Opening",
+  "moves": ["g2g4"]
+},
+{
+  "eco": "F01",
+  "name": "Nimzowitsch–Larsen Attack",
+  "moves": ["b2b3"]
+},
+{
+  "eco": "F02",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","d7d5","g1f3"]
+},
+{
+  "eco": "F03",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1g5"]
+},
+{
+  "eco": "F04",
+  "name": "Queen's Pawn Game, Colle System",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","e2e3"]
+},
+{
+  "eco": "F05",
+  "name": "Queen's Pawn Game, Zukertort Variation",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","b1d2"]
+},
+{
+  "eco": "F06",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c2c3"]
+},
+{
+  "eco": "F07",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1g5","c7c5"]
+},
+{
+  "eco": "F08",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1f4"]
+},
+{
+  "eco": "F09",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","g1f3","g8f6","c1f4","c7c5"]
+},
+
+{
+  "eco": "F10",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5"]
+},
+{
+  "eco": "F11",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","d7d5"]
+},
+{
+  "eco": "F12",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","d7d5","e2e3"]
+},
+{
+  "eco": "F13",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","d7d5","e2e3","c7c5"]
+},
+{
+  "eco": "F14",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","h7h6"]
+},
+{
+  "eco": "F15",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5"]
+},
+{
+  "eco": "F16",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","f6e4"]
+},
+{
+  "eco": "F17",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","f6e4","g5f4"]
+},
+{
+  "eco": "F18",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","f6e4","g5f4","d7d5"]
+},
+{
+  "eco": "F19",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","f6e4","g5f4","d7d5","e2e3"]
+},
+
+{
+  "eco": "F20",
+  "name": "Queen's Pawn Game",
+  "moves": ["d2d4","d7d5","c1g5"]
+},
+{
+  "eco": "F21",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6"]
+},
+{
+  "eco": "F22",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3"]
+},
+{
+  "eco": "F23",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3","c7c5"]
+},
+{
+  "eco": "F24",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3","c7c5","c2c3"]
+},
+{
+  "eco": "F25",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3","c7c5","c2c3","b8c6"]
+},
+{
+  "eco": "F26",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3"]
+},
+{
+  "eco": "F27",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","d7d5","c1g5","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6"]
+},
+{
+  "eco": "F28",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","d7d5"]
+},
+{
+  "eco": "F29",
+  "name": "Queen's Pawn Game, Trompowsky Attack",
+  "moves": ["d2d4","g8f6","c1g5","d7d5","e2e3"]
+},
+
+{
+  "eco": "F30",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6"]
+},
+{
+  "eco": "F31",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3"]
+},
+{
+  "eco": "F32",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6"]
+},
+{
+  "eco": "F33",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3"]
+},
+{
+  "eco": "F34",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5"]
+},
+{
+  "eco": "F35",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3"]
+},
+{
+  "eco": "F36",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6"]
+},
+{
+  "eco": "F37",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1"]
+},
+{
+  "eco": "F38",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7"]
+},
+{
+  "eco": "F39",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2"]
+},
+
+{
+  "eco": "F40",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6"]
+},
+{
+  "eco": "F41",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3"]
+},
+{
+  "eco": "F42",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5"]
+},
+{
+  "eco": "F43",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3"]
+},
+{
+  "eco": "F44",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6"]
+},
+{
+  "eco": "F45",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3"]
+},
+{
+  "eco": "F46",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6"]
+},
+{
+  "eco": "F47",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3"]
+},
+{
+  "eco": "F48",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6"]
+},
+{
+  "eco": "F49",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3"]
+},
+
+{
+  "eco": "F50",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8"]
+},
+{
+  "eco": "F51",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2"]
+},
+{
+  "eco": "F52",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7"]
+},
+{
+  "eco": "F53",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2"]
+},
+{
+  "eco": "F54",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6"]
+},
+{
+  "eco": "F55",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6","e1g1"]
+},
+{
+  "eco": "F56",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6","e1g1","a7a5"]
+},
+{
+  "eco": "F57",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6","e1g1","a7a5","f4g5"]
+},
+{
+  "eco": "F58",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6","e1g1","a7a5","f4g5","f6d7"]
+},
+{
+  "eco": "F59",
+  "name": "Queen's Pawn Game, London System",
+  "moves": ["d2d4","d7d5","c1f4","g8f6","e2e3","c7c5","c2c3","b8c6","g1f3","e7e6","h2h3","f8d6","f1d3","e8g8","b1d2","d8c7","d1e2","b7b6","e1g1","a7a5","f4g5","f6d7","e3e4"]
+},
+
+{
+  "eco": "F60",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7"]
+},
+{
+  "eco": "F61",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2"]
+},
+{
+  "eco": "F62",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6"]
+},
+{
+  "eco": "F63",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4"]
+},
+{
+  "eco": "F64",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7"]
+},
+{
+  "eco": "F65",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3"]
+},
+{
+  "eco": "F66",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4"]
+},
+{
+  "eco": "F67",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4e7"]
+},
+{
+  "eco": "F68",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4e7","d8e7"]
+},
+{
+  "eco": "F69",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4e7","d8e7","d1c2"]
+},
+
+{
+  "eco": "F70",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3"]
+},
+{
+  "eco": "F71",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3"]
+},
+{
+  "eco": "F72",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3"]
+},
+{
+  "eco": "F73",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3"]
+},
+{
+  "eco": "F74",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2"]
+},
+{
+  "eco": "F75",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2"]
+},
+{
+  "eco": "F76",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2"]
+},
+{
+  "eco": "F77",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7"]
+},
+{
+  "eco": "F78",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7","g3e5"]
+},
+{
+  "eco": "F79",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7","g3e5","c7e5"]
+},
+
+{
+  "eco": "F70",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3"]
+},
+{
+  "eco": "F71",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3"]
+},
+{
+  "eco": "F72",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3"]
+},
+{
+  "eco": "F73",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3"]
+},
+{
+  "eco": "F74",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2"]
+},
+{
+  "eco": "F75",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2"]
+},
+{
+  "eco": "F76",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2"]
+},
+{
+  "eco": "F77",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7"]
+},
+{
+  "eco": "F78",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7","g3e5"]
+},
+{
+  "eco": "F79",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7","g3e5","c7e5"]
+},
+
+{
+  "eco": "F80",
+  "name": "Queen's Pawn Game, Levitsky Attack",
+  "moves": ["d2d4","d7d5","c1g5","c7c6","e2e3","g8f6","g1f3","c8f5","f1d3","e7e6","e1g1","f8e7","b1d2","h7h6","g5h4","b8d7","h2h3","f6e4","h4g3","e4g3","f2g3","f5d3","d1e2","d3e2","e2e2","d8c7","g3e5","c7e5","d4e5"]
+},
+{
+  "eco": "F81",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7"]
+},
+{
+  "eco": "F82",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3"]
+},
+{
+  "eco": "F83",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6"]
+},
+{
+  "eco": "F84",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4"]
+},
+{
+  "eco": "F85",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4","b7b6"]
+},
+{
+  "eco": "F86",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4","b7b6","f1d3"]
+},
+{
+  "eco": "F87",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4","b7b6","f1d3","c8b7"]
+},
+{
+  "eco": "F88",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4","b7b6","f1d3","c8b7","b1d2"]
+},
+{
+  "eco": "F89",
+  "name": "Queen's Pawn Game, Torre Attack",
+  "moves": ["d2d4","g8f6","g1f3","e7e6","c1g5","f8e7","e2e3","h7h6","g5h4","b7b6","f1d3","c8b7","b1d2","d7d5"]
+},
+
+{
+  "eco": "F90",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4"]
+},
+{
+  "eco": "F91",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4"]
+},
+{
+  "eco": "F92",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3"]
+},
+{
+  "eco": "F93",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6"]
+},
+{
+  "eco": "F94",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5"]
+},
+{
+  "eco": "F95",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5","c8f5"]
+},
+{
+  "eco": "F96",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5","c8f5","f2f3"]
+},
+{
+  "eco": "F97",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5","c8f5","f2f3","e4f3"]
+},
+{
+  "eco": "F98",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5","c8f5","f2f3","e4f3","g5f6"]
+},
+{
+  "eco": "F99",
+  "name": "Queen's Pawn Game, Blackmar–Diemer Gambit",
+  "moves": ["d2d4","d7d5","e2e4","d5e4","b1c3","g8f6","f1g5","c8f5","f2f3","e4f3","g5f6","e7f6"]
+}
+
 ]
 
 
@@ -4330,6 +7452,7 @@ function renderMoveList() {
 		if (fen) {
 			restoreFromFEN(fen);
 			state.positionHistory = [fen];
+      if (typeof rebuildRepetitionTracker === 'function') rebuildRepetitionTracker();
 			render();
 		}
 	};
@@ -4415,7 +7538,9 @@ function renderMoveList() {
     // Ensure it's clickable and focusable even if other DOM handlers exist
     searchBox.style.pointerEvents = 'auto';
     searchBox.style.zIndex = '20';
-    searchBox.addEventListener('mousedown', function(e) { e.stopPropagation(); this.focus(); });
+  const _focusSearchBox = function(e) { e.stopPropagation(); this.focus(); };
+  searchBox.addEventListener('mousedown', _focusSearchBox);
+  searchBox.addEventListener('touchstart', _focusSearchBox, { passive: true });
     // Show search results list and let user click to load specific game
     const resultsDiv = document.createElement('div');
     resultsDiv.id = 'pgnSearchResults';
@@ -4446,74 +7571,42 @@ searchBox.addEventListener('input', function() {
         return false;
     });
 
-    // Store opening match data for delegation
-    let openingMatchData = [];
     if (openingMatches.length > 0) {
-      for (let i = 0; i < Math.min(openingMatches.length, 10); i++) {
-        const o = openingMatches[i];
-        const item = document.createElement('div');
-        item.className = 'pgn-search-item';
-        item.style.padding = '6px 8px';
-        item.style.borderRadius = '6px';
-        item.style.cursor = 'pointer';
-        item.style.color = 'var(--accent)';
-        item.style.marginBottom = '4px';
-        item.textContent = `[Opening] ${o.eco} — ${o.name}`;
-        // Store index for delegation
-        item.setAttribute('data-opening-index', i);
-        openingMatchData[i] = o;
-        // Log when adding each opening result
-        console.log('[DEBUG] Added opening search result:', o.eco, o.name, item);
-        resultsDiv.appendChild(item);
-      }
-      // Divider if there are also PGN matches
-      if (typeof window.searchPGNGames === 'function' && window.searchPGNGames(val).length > 0) {
-        const divider = document.createElement('div');
-        divider.style.cssText = 'border-bottom:1px solid #333;margin:6px 0;';
-        resultsDiv.appendChild(divider);
-      }
-    }
-
-    // Event delegation for opening search results
-    resultsDiv.onclick = function(e) {
-      let el = e.target;
-      while (el && el !== resultsDiv) {
-        if (el.classList && el.classList.contains('pgn-search-item') && el.hasAttribute('data-opening-index')) {
-          const idx = parseInt(el.getAttribute('data-opening-index'), 10);
-          const o = openingMatchData[idx];
-          if (!o) return;
-          e.stopPropagation();
-          e.preventDefault();
-          console.log('[DEBUG] Delegated opening clicked:', o.eco, o.name, o.moves);
-          resetBoard();
-          setTimeout(() => {
-            let moveCount = 0;
-            for (const move of o.moves) {
-              const legal = generateLegalMoves(state.turn);
-              const mv = legal.find(m => {
-                const from = String.fromCharCode(97 + m.from.x) + (8 - m.from.y);
-                const to = String.fromCharCode(97 + m.to.x) + (8 - m.to.y);
-                return (from + to) === move;
-              });
-              if (mv) {
-                makeMove(mv);
-                moveCount++;
-                console.log(`[DEBUG] Made move: ${move}`);
-              } else {
-                console.warn(`[DEBUG] Move not found in legal moves: ${move}`, legal);
-              }
-            }
-            render();
-            updateHud();
-            resultsDiv.style.display = 'none';
-            searchBox.value = '';
-            console.log(`[DEBUG] Finished playing opening. Moves made: ${moveCount}/${o.moves.length}`);
-          }, 10);
-          return;
+        for (let i = 0; i < Math.min(openingMatches.length, 10); i++) {
+            const o = openingMatches[i];
+            const item = document.createElement('div');
+            item.className = 'pgn-search-item';
+            item.style.padding = '6px 8px';
+            item.style.borderRadius = '6px';
+            item.style.cursor = 'pointer';
+            item.style.color = 'var(--accent)';
+            item.style.marginBottom = '4px';
+            item.textContent = `[Opening] ${o.eco} — ${o.name}`;
+            item.addEventListener('click', () => {
+                resetBoard();
+                for (const move of o.moves) {
+                    const legal = generateLegalMoves(state.turn);
+                    const mv = legal.find(m => {
+                        const from = String.fromCharCode(97 + m.from.x) + (8 - m.from.y);
+                        const to = String.fromCharCode(97 + m.to.x) + (8 - m.to.y);
+                        return (from + to) === move;
+                    });
+                    if (mv) makeMove(mv);
+                }
+                render();
+                updateHud();
+                resultsDiv.style.display = 'none';
+                searchBox.value = '';
+            });
+            resultsDiv.appendChild(item);
         }
-        el = el.parentElement;
-      }
-    };
+        // Divider if there are also PGN matches
+        if (typeof window.searchPGNGames === 'function' && window.searchPGNGames(val).length > 0) {
+            const divider = document.createElement('div');
+            divider.style.cssText = 'border-bottom:1px solid #333;margin:6px 0;';
+            resultsDiv.appendChild(divider);
+        }
+    }
 
     // --- Existing PGN search code ---
     if (!pgnGames || pgnGames.length === 0) {
@@ -4933,14 +8026,268 @@ attachUIButtons();
 	}
 
 	function toggleHistory(force) {
-		const show = force !== undefined ? force : !historyPanel.classList.contains("show");
-		historyPanel.classList.toggle("show", show);
+    if (document.body.classList.contains('mobile-nav')) {
+      if (force === false) {
+        if (typeof closeDrawer === 'function') closeDrawer();
+        return;
+      }
+      if (typeof openMovesPanel === 'function') openMovesPanel();
+      return;
+    }
+    const show = force !== undefined ? force : !historyPanel.classList.contains("show");
+    historyPanel.classList.toggle("show", show);
 	}
 
 	function toggleRules(force) {
 		const show = force !== undefined ? force : !rulesOverlay.classList.contains("show");
 		rulesOverlay.classList.toggle("show", show);
 	}
+
+
+  // ============================================================================
+  // Mobile Navigation: Bottom Toolbar + Slide-up Drawer
+  // ============================================================================
+
+  let _mobileNavState = {
+    enabled: false,
+    lastPanel: 'moves',
+    originalHomes: new Map()
+  };
+
+  function _isMobileNavCandidate() {
+    return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+  }
+
+  function _rememberHome(node) {
+    if (!node || _mobileNavState.originalHomes.has(node)) return;
+    _mobileNavState.originalHomes.set(node, { parent: node.parentNode, next: node.nextSibling });
+  }
+
+  function _restoreHome(node) {
+    const home = _mobileNavState.originalHomes.get(node);
+    if (!node || !home || !home.parent) return;
+    try {
+      home.parent.insertBefore(node, home.next);
+    } catch (e) {
+      // Ignore DOM errors (e.g., parent removed)
+    }
+  }
+
+  function _setMobileNavEnabled(on) {
+    _mobileNavState.enabled = !!on;
+    document.body.classList.toggle('mobile-nav', _mobileNavState.enabled);
+  }
+
+  function _drawerEls() {
+    return {
+      drawer: document.getElementById('drawer'),
+      scrim: document.getElementById('drawer-scrim'),
+      content: document.getElementById('drawer-content'),
+      toolbar: document.getElementById('bottom-toolbar')
+    };
+  }
+
+  function openDrawer(panelKey) {
+    const { drawer, scrim } = _drawerEls();
+    if (!drawer || !scrim) return;
+    if (!_mobileNavState.enabled) return;
+
+    if (panelKey) _mobileNavState.lastPanel = panelKey;
+    drawer.classList.add('open');
+    scrim.classList.add('show');
+    drawer.setAttribute('aria-hidden', 'false');
+    scrim.setAttribute('aria-hidden', 'false');
+    setBoardInput(false);
+  }
+
+  function closeDrawer() {
+    const { drawer, scrim } = _drawerEls();
+    if (!drawer || !scrim) return;
+    drawer.classList.remove('open');
+    scrim.classList.remove('show');
+    drawer.setAttribute('aria-hidden', 'true');
+    scrim.setAttribute('aria-hidden', 'true');
+    setBoardInput(!state.menuActive);
+  }
+
+  function _setActiveDrawerTab(panelKey) {
+    const { drawer } = _drawerEls();
+    if (!drawer) return;
+    const tabs = drawer.querySelectorAll('[data-panel]');
+    tabs.forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-panel') === panelKey));
+  }
+
+  function _mountIntoDrawer(node) {
+    const { content } = _drawerEls();
+    if (!content || !node) return;
+    content.innerHTML = '';
+    content.appendChild(node);
+  }
+
+  function openMovesPanel() {
+    if (!_mobileNavState.enabled) return;
+    // On small screens CSS normally hides #history unless it has .show.
+    historyPanel.classList.add('show');
+    _rememberHome(historyPanel);
+    _mountIntoDrawer(historyPanel);
+    _setActiveDrawerTab('moves');
+    openDrawer('moves');
+  }
+
+  function openSearchPanel() {
+    if (!_mobileNavState.enabled) return;
+    openMovesPanel();
+    _setActiveDrawerTab('search');
+    openDrawer('search');
+    setTimeout(() => {
+      const el = document.getElementById('pgnSearch');
+      if (el) {
+        el.focus();
+        try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* ignore */ }
+      }
+    }, 0);
+  }
+
+  function openEnginePanel() {
+    if (!_mobileNavState.enabled) return;
+    const enginePanel = document.getElementById('engine-info-panel') || (typeof createEngineInfoPanel === 'function' ? createEngineInfoPanel() : null);
+    if (!enginePanel) return;
+    _rememberHome(enginePanel);
+    _mountIntoDrawer(enginePanel);
+    _setActiveDrawerTab('engine');
+    openDrawer('engine');
+  }
+
+  function openTrainingPanel() {
+    if (!_mobileNavState.enabled) return;
+    const trainingPanel = document.getElementById('training-panel');
+    if (!trainingPanel) return;
+    _rememberHome(trainingPanel);
+    _mountIntoDrawer(trainingPanel);
+    _setActiveDrawerTab('training');
+    openDrawer('training');
+  }
+
+  function openMetaPanel() {
+    if (!_mobileNavState.enabled) return;
+    const meta = document.getElementById('meta-panel');
+    const status = document.getElementById('status-panel');
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '12px';
+    wrap.id = 'drawer-meta-wrap';
+
+    // Restore any previous wrap content to avoid duplicates
+    const oldWrap = document.getElementById('drawer-meta-wrap');
+    if (oldWrap && oldWrap.parentNode) oldWrap.parentNode.removeChild(oldWrap);
+
+    if (meta) { _rememberHome(meta); wrap.appendChild(meta); }
+    if (status) { _rememberHome(status); wrap.appendChild(status); }
+
+    _mountIntoDrawer(wrap);
+    _setActiveDrawerTab('meta');
+    openDrawer('meta');
+  }
+
+  function openControlsPanel() {
+    if (!_mobileNavState.enabled) return;
+    const controlsPanel = document.getElementById('controls');
+    if (!controlsPanel) return;
+    _rememberHome(controlsPanel);
+    _mountIntoDrawer(controlsPanel);
+    _setActiveDrawerTab(null);
+    openDrawer('controls');
+  }
+
+  function _wireMobileToolbar() {
+    const { toolbar } = _drawerEls();
+    if (!toolbar) return;
+
+    const btnStart = toolbar.querySelector('[data-action="start"]');
+    const btnUndo = toolbar.querySelector('[data-action="undo"]');
+    const btnRedo = toolbar.querySelector('[data-action="redo"]');
+    const btnEnd = toolbar.querySelector('[data-action="end"]');
+    const btnMenu = toolbar.querySelector('[data-action="menu"]');
+
+    if (btnStart) btnStart.onclick = undoToStart;
+    if (btnUndo) btnUndo.onclick = undoMove;
+    if (btnRedo) btnRedo.onclick = redoMove;
+    if (btnEnd) btnEnd.onclick = redoToEnd;
+    if (btnMenu) btnMenu.onclick = () => {
+      // Default to last panel, fall back to controls
+      const last = _mobileNavState.lastPanel || 'moves';
+      if (last === 'engine') openEnginePanel();
+      else if (last === 'training') openTrainingPanel();
+      else if (last === 'meta') openMetaPanel();
+      else if (last === 'search') openSearchPanel();
+      else openMovesPanel();
+    };
+  }
+
+  function _wireDrawerChrome() {
+    const { drawer, scrim } = _drawerEls();
+    if (!drawer || !scrim) return;
+
+    const closeBtn = drawer.querySelector('[data-action="close-drawer"]');
+    if (closeBtn) closeBtn.onclick = closeDrawer;
+    scrim.onclick = closeDrawer;
+
+    const tabs = drawer.querySelectorAll('[data-panel]');
+    tabs.forEach(btn => {
+      btn.onclick = () => {
+        const key = btn.getAttribute('data-panel');
+        if (key === 'moves') openMovesPanel();
+        else if (key === 'search') openSearchPanel();
+        else if (key === 'controls') openControlsPanel();
+        else if (key === 'engine') openEnginePanel();
+        else if (key === 'training') openTrainingPanel();
+        else if (key === 'meta') openMetaPanel();
+      };
+    });
+  }
+
+  function _enableMobileNav() {
+    _setMobileNavEnabled(true);
+	try { if (typeof window.mountPGNNavigation === 'function') window.mountPGNNavigation(); } catch (e) {}
+    _wireMobileToolbar();
+    _wireDrawerChrome();
+
+    // Move core panels into drawer so they remain usable even when the sidebar is hidden.
+    // Default content: Moves panel.
+    openMovesPanel();
+    closeDrawer();
+  }
+
+
+  function _disableMobileNav() {
+    _setMobileNavEnabled(false);
+    closeDrawer();
+	try { if (typeof window.mountPGNNavigation === 'function') window.mountPGNNavigation(); } catch (e) {}
+
+    // Restore moved panels back to their original homes.
+    const controlsPanel = document.getElementById('controls');
+    const enginePanel = document.getElementById('engine-info-panel');
+    const trainingPanel = document.getElementById('training-panel');
+    const meta = document.getElementById('meta-panel');
+    const status = document.getElementById('status-panel');
+
+    _restoreHome(historyPanel);
+    _restoreHome(controlsPanel);
+    _restoreHome(enginePanel);
+    _restoreHome(trainingPanel);
+    _restoreHome(meta);
+    _restoreHome(status);
+  }
+
+  function initMobileNav() {
+    const { drawer, content, toolbar } = _drawerEls();
+    if (!drawer || !content || !toolbar) return;
+
+    const shouldEnable = _isMobileNavCandidate();
+    if (shouldEnable && !_mobileNavState.enabled) _enableMobileNav();
+    else if (!shouldEnable && _mobileNavState.enabled) _disableMobileNav();
+  }
 
 	function showStartOverlay() {
 		startOverlay.classList.add("show");
@@ -5210,8 +8557,17 @@ function updateHud() {
 	render();
 	updateHud();
 
-	uiLayer.addEventListener("mousedown", handlePointer);
-	window.addEventListener("resize", () => { resize(); render(); });
+  if (window.PointerEvent) {
+    uiLayer.addEventListener("pointerdown", handlePointer);
+  } else {
+    uiLayer.addEventListener("mousedown", handlePointer);
+    uiLayer.addEventListener("touchstart", handlePointer, { passive: true });
+  }
+  window.addEventListener("resize", () => {
+    resize();
+    render();
+    if (typeof initMobileNav === 'function') initMobileNav();
+  });
 	window.addEventListener("keydown", handleKey);
 	btn1p.addEventListener("click", () => { selectedMode = "1p"; applyModeUI(); });
 	btn2p.addEventListener("click", () => { selectedMode = "2p"; applyModeUI(); });
@@ -5225,6 +8581,9 @@ function updateHud() {
 	btnHint2.addEventListener("click", () => { setHintToggle(false); requestHintDepth4(); });
 	hudBtnHistory.addEventListener("click", () => toggleHistory());
 	btnHistoryClose.addEventListener("click", () => toggleHistory(false));
+
+  // Mobile navigation (bottom toolbar + drawer)
+  if (typeof initMobileNav === 'function') initMobileNav();
 
 
 // ============================================================================
@@ -5324,6 +8683,11 @@ function renderMultiPVLines(pvResults) {
 		const result = pvResults[i];
 		const isMain = i === 0;
 		const lineNum = i + 1;
+    const depth = result.depth ?? '--';
+    const nodes = Number.isFinite(result.nodes) ? result.nodes : 0;
+    const timeMs = Number.isFinite(result.timeMs) ? result.timeMs : 0;
+    const nps = timeMs > 0 ? Math.round(nodes * 1000 / timeMs) : 0;
+    const stats = `d${depth} · n${nodes.toLocaleString()} · ${timeMs}ms · ${nps.toLocaleString()} nps`;
 
 		const bgColor = isMain ? 'rgba(110, 193, 255, 0.08)' : 'transparent';
 		const borderLeft = isMain ? '3px solid var(--accent)' : '3px solid transparent';
@@ -5351,6 +8715,9 @@ function renderMultiPVLines(pvResults) {
 						${formatScore(result.score)}
 					</span>
 				</div>
+        <div style="color: var(--muted); font-size: 10px; margin-bottom: 4px;">
+          ${stats}
+        </div>
 				<div style="color: var(--muted); font-size: 11px; overflow-x: auto; white-space: nowrap;">
 					${formatPVLine(result.pv)}
 				</div>
@@ -5457,113 +8824,123 @@ const originalAiChooseMove = aiChooseMove;
 
 // Override aiChooseMove to support Multi-PV
 aiChooseMove = function() {
-	const legal = generateLegalMoves(state.aiColor);
-	if (!legal.length) return null;
-	
-	const settings = getDifficultySettings(state.aiLevel);
-	currentDifficulty = settings;
-	CONTEMPT = settings.contempt !== undefined ? settings.contempt : 20;
-	
-	if (settings.moveNoise && Math.random() < settings.moveNoise) {
-		return legal[Math.floor(Math.random() * legal.length)];
-	}
+  clearEngineInfo();
+  const legal = generateLegalMoves(state.aiColor);
+  if (!legal.length) return null;
 
-	const book = pickBookMove(legal, settings.openingBookStrength);
-	if (book) return book;
+  const settings = getDifficultySettings(state.aiLevel);
+  currentDifficulty = settings;
+  CONTEMPT = settings.contempt !== undefined ? settings.contempt : 20;
 
-	seePruneMain = 0;
-	seePruneQ = 0;
-	searchAge += 1;
+  if (settings.moveNoise && Math.random() < settings.moveNoise) {
+    return legal[Math.floor(Math.random() * legal.length)];
+  }
 
-	const ctx = cloneCtx(state.board, state.castling, state.enPassant);
-	const maxDepth = settings.searchDepth;
-	const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
+  const book = pickBookMove(legal, settings.openingBookStrength);
+  if (book) return book;
 
-	// Use Multi-PV search if enabled
-	if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
-		const pvResults = searchMultiPV(
-			ctx,
-			maxDepth,
-			state.aiColor,
-			state.aiColor,
-			deadline,
-			multiPVConfig.lines
-		);
+  seePruneMain = 0;
+  seePruneQ = 0;
+  searchAge += 1;
 
-		// Store results for display
-		multiPVConfig.currentResults = pvResults;
-		renderMultiPVLines(pvResults);
+  const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
+  const ctx = cloneCtx(state.board, state.castling, state.enPassant);
+  const requestedDepth = settings.searchDepth;
+  const maxDepth = isMobileNav ? Math.min(requestedDepth, 10) : requestedDepth;
+  const requestedLines = multiPVConfig.lines;
+  const effectiveLines = isMobileNav ? Math.min(requestedLines, 2) : requestedLines;
+  const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
 
-		// Choose best move from first line
-		let choice = pvResults[0]?.move || legal[Math.floor(Math.random() * legal.length)];
+  // Use Multi-PV search if enabled
+  if (multiPVConfig.enabled && effectiveLines > 1) {
+    const pvResults = searchMultiPV(
+      ctx,
+      maxDepth,
+      state.aiColor,
+      state.aiColor,
+      deadline,
+      effectiveLines
+    );
 
-		// Apply blunder chance
-		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
-			const others = legal.filter(mv => mv !== choice);
-			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
-		}
+    multiPVConfig.currentResults = pvResults;
+    renderMultiPVLines(pvResults);
 
-		return choice;
-	} else {
-		// Single-PV mode (original behavior)
-		let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
-		let prevScore = 0;
+    let choice = pvResults[0]?.move || legal[Math.floor(Math.random() * legal.length)];
+    const bestEval = pvResults[0]?.score ?? 0;
+    const nodes = pvResults.reduce((sum, pv) => sum + (pv.nodes || 0), 0);
+    updateEngineInfo({ depth: maxDepth, nodes, evalScore: bestEval });
+    if (typeof updateEngineInfo.flush === 'function') updateEngineInfo.flush();
 
-		for (let d = 1; d <= maxDepth; d++) {
-			let window = 40;
-			let alpha = -Infinity;
-			let beta = Infinity;
-			let failCount = 0;
+    if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
+      const others = legal.filter(mv => mv !== choice);
+      if (others.length) choice = others[Math.floor(Math.random() * others.length)];
+    }
 
-			if (d > 1 && Number.isFinite(prevScore)) {
-				alpha = prevScore - window;
-				beta = prevScore + window;
-			}
+    setTimeout(() => clearEngineInfo(), 800);
+    return choice;
+  }
 
-			let res;
-			while (true) {
-				res = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-				if (Date.now() > deadline || res.cut) break;
+  // Single-PV (scores are in pawns)
+  let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
+  let prevScore = 0;
+  let totalNodes = 0;
+  let bestEval = 0;
+  const searchFn = (typeof window.searchBestMoveWithInfo === 'function') ? window.searchBestMoveWithInfo : searchBestMove;
 
-				if (res.score <= alpha) {
-					failCount++;
-					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200);
-					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
-					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
-					continue;
-				}
+  for (let d = 1; d <= maxDepth; d++) {
+    if (Date.now() > deadline) break;
 
-				if (res.score >= beta) {
-					failCount++;
-					window = Math.min(window * (failCount < 3 ? 2 : 4), 3200);
-					alpha = Number.isFinite(prevScore) ? prevScore - window : -Infinity;
-					beta = Number.isFinite(prevScore) ? prevScore + window : Infinity;
-					continue;
-				}
+    let alpha = -Infinity;
+    let beta = Infinity;
+    let aspWindow = 0.50;
+    if (d > 1 && Number.isFinite(prevScore)) {
+      alpha = prevScore - aspWindow;
+      beta = prevScore + aspWindow;
+    }
 
-				break;
-			}
+    let res = null;
+    let attempts = 0;
+    while (attempts < 4) {
+      res = searchFn(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
+      if (!res || res.cut || Date.now() > deadline) break;
+      if (Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
+        attempts++;
+        aspWindow = Math.min(aspWindow * 2, 32);
+        alpha = prevScore - aspWindow;
+        beta = prevScore + aspWindow;
+        continue;
+      }
+      break;
+    }
 
-			if (res.move) {
-				best = res;
-				prevScore = res.score;
-			}
-			if (Date.now() > deadline || res.cut) break;
-		}
+    if (res && !res.cut && Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
+      res = searchFn(ctx, d, -Infinity, Infinity, state.aiColor, state.aiColor, deadline, 0);
+    }
 
-		// Clear Multi-PV display in single-PV mode
-		multiPVConfig.currentResults = [];
-		renderMultiPVLines([]);
+    if (Number.isFinite(engineInfo.nodes)) totalNodes += engineInfo.nodes;
+    if (res && res.move) {
+      best = res;
+      prevScore = res.score;
+      bestEval = res.score;
+    }
+    updateEngineInfo({ depth: d, nodes: totalNodes, evalScore: bestEval });
+    if (!res || res.cut || Date.now() > deadline) break;
+  }
 
-		let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
+  // Clear Multi-PV display in single-PV mode
+  multiPVConfig.currentResults = [];
+  renderMultiPVLines([]);
 
-		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
-			const others = legal.filter(mv => mv !== choice);
-			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
-		}
+  let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
+  if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
+    const others = legal.filter(mv => mv !== choice);
+    if (others.length) choice = others[Math.floor(Math.random() * others.length)];
+  }
 
-		return choice;
-	}
+  updateEngineInfo({ depth: maxDepth, nodes: totalNodes, evalScore: bestEval });
+  if (typeof updateEngineInfo.flush === 'function') updateEngineInfo.flush();
+  setTimeout(() => clearEngineInfo(), 800);
+  return choice;
 };
 
 // ============================================================================
@@ -5585,14 +8962,17 @@ requestHint = function(depth) {
 	const turnColor = state.turn;
 
 	// If Multi-PV is enabled, show multiple lines
-	if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
+  const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
+  const effectiveLines = isMobileNav ? Math.min(multiPVConfig.lines, 2) : multiPVConfig.lines;
+  const effectiveDepth = isMobileNav ? Math.min(depth, 10) : depth;
+  if (multiPVConfig.enabled && effectiveLines > 1) {
 		const pvResults = searchMultiPV(
 			ctxSnap,
-			depth,
+      effectiveDepth,
 			turnColor,
 			turnColor,
 			Infinity,
-			multiPVConfig.lines
+      effectiveLines
 		);
 
 		multiPVConfig.currentResults = pvResults;

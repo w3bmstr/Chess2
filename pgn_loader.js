@@ -436,9 +436,40 @@ window.loadPGN = function(pgn) {
 // ========== PGN Navigation Buttons ==========
 if (typeof document !== 'undefined') {
     document.addEventListener('DOMContentLoaded', function() {
+        function mountPGNNavigation() {
+            const wrapper = document.getElementById('pgn-nav-wrapper');
+            if (!wrapper) return;
+            const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
+
+            if (isMobileNav) {
+                // Prefer the Moves panel so it naturally lives inside the mobile drawer.
+                const moveListPanel = document.getElementById('move-list');
+                if (moveListPanel && moveListPanel.parentNode) {
+                    const metaDiv = document.getElementById('pgn-metadata');
+                    const anchor = metaDiv && metaDiv.parentNode === moveListPanel.parentNode ? metaDiv : moveListPanel;
+                    if (wrapper.parentNode !== moveListPanel.parentNode) {
+                        moveListPanel.parentNode.insertBefore(wrapper, anchor);
+                    } else if (wrapper.nextSibling !== anchor) {
+                        // Keep stable ordering: wrapper above metadata/move list.
+                        moveListPanel.parentNode.insertBefore(wrapper, anchor);
+                    }
+                    return;
+                }
+            }
+
+            // Desktop (or fallback): keep it with the standard controls.
+            const controlsPanel = document.getElementById('controls');
+            if (controlsPanel && wrapper.parentNode !== controlsPanel) {
+                controlsPanel.appendChild(wrapper);
+            }
+        }
+        window.mountPGNNavigation = mountPGNNavigation;
+
         const controlsPanel = document.getElementById('controls');
-        if (controlsPanel && !document.getElementById('btn-prev-pgn')) {
+        if (controlsPanel && !document.getElementById('pgn-nav-wrapper')) {
             const wrapper = document.createElement('div');
+            wrapper.id = 'pgn-nav-wrapper';
+            wrapper.className = 'pgn-nav-wrapper';
             wrapper.style.display = 'flex';
             wrapper.style.alignItems = 'center';
             wrapper.style.gap = '8px';
@@ -485,8 +516,18 @@ if (typeof document !== 'undefined') {
             wrapper.appendChild(nextBtn);
 
             controlsPanel.appendChild(wrapper);
-            // Initialize state
+            // Initialize state and mount appropriately (desktop vs mobile drawer)
             renderGameInfo();
+            mountPGNNavigation();
+
+            // Keep placement correct if mobile-nav toggles on resize.
+            let _pgnMountTimer = null;
+            window.addEventListener('resize', () => {
+                if (_pgnMountTimer) clearTimeout(_pgnMountTimer);
+                _pgnMountTimer = setTimeout(() => {
+                    try { mountPGNNavigation(); } catch (e) {}
+                }, 80);
+            });
         }
     });
 }
@@ -504,7 +545,10 @@ if (typeof document !== 'undefined') {
             searchBox.style.width = '100%';
             searchBox.style.pointerEvents = 'auto';
             searchBox.style.zIndex = '20';
-            searchBox.addEventListener('mousedown', function(e) { e.stopPropagation(); this.focus(); });
+            const stopAndFocus = function(e) { try { e.stopPropagation(); } catch (err) {} this.focus(); };
+            searchBox.addEventListener('mousedown', stopAndFocus);
+            searchBox.addEventListener('touchstart', stopAndFocus, { passive: true });
+            searchBox.addEventListener('pointerdown', stopAndFocus);
 
             const resultsDiv = document.createElement('div');
             resultsDiv.id = 'pgnSearchResults';

@@ -28,6 +28,68 @@ state.redoStack = [];
 state.positionHistory = [];
 
 // ============================================================================
+// Repetition tracking (O(1) threefold repetition)
+// Key is the FEN prefix: piece placement + turn + castling + en-passant.
+// ============================================================================
+
+function repetitionKeyFromFEN(fen) {
+	if (!fen || typeof fen !== 'string') return '';
+	const parts = fen.trim().split(/\s+/);
+	// Ignore halfmove/fullmove; repetition depends only on first 4 fields.
+	return parts.slice(0, 4).join(' ');
+}
+
+function rebuildRepetitionTracker() {
+	if (typeof state === 'undefined') return;
+	const stack = [];
+	const counts = Object.create(null);
+
+	let history = Array.isArray(state.positionHistory) ? state.positionHistory : [];
+	if (history.length === 0) {
+		try {
+			const fen = boardToFEN();
+			history = [fen];
+			state.positionHistory = history;
+		} catch (e) {
+			history = [];
+		}
+	}
+
+	for (const fen of history) {
+		const key = repetitionKeyFromFEN(fen);
+		stack.push(key);
+		counts[key] = (counts[key] || 0) + 1;
+	}
+
+	state.repetition = { stack, counts };
+}
+
+function ensureRepetitionTracker() {
+	if (!state.repetition || !Array.isArray(state.repetition.stack) || !state.repetition.counts) {
+		rebuildRepetitionTracker();
+	}
+}
+
+function pushRepetitionFromFEN(fen) {
+	ensureRepetitionTracker();
+	const key = repetitionKeyFromFEN(fen);
+	state.repetition.stack.push(key);
+	state.repetition.counts[key] = (state.repetition.counts[key] || 0) + 1;
+}
+
+function popRepetition() {
+	ensureRepetitionTracker();
+	if (!state.repetition.stack.length) return;
+	const key = state.repetition.stack.pop();
+	const next = (state.repetition.counts[key] || 0) - 1;
+	if (next <= 0) {
+		delete state.repetition.counts[key];
+	} else {
+		state.repetition.counts[key] = next;
+	}
+}
+
+// ============================================================================
 // Move Navigation Functions
 // ============================================================================
 
@@ -38,6 +100,7 @@ function undoMove() {
 	const undoneMove = state.moveHistory.pop();
 	state.redoStack.push(undoneMove);
 	state.positionHistory.pop();
+	popRepetition();
 	
 	// Restore position
 	if (state.positionHistory.length > 0) {
@@ -93,6 +156,7 @@ function redoMove() {
 	// Save FEN
 	const currentFEN = boardToFEN();
 	state.positionHistory.push(currentFEN);
+	pushRepetitionFromFEN(currentFEN);
 	
 	// Check game state
 	const legal = generateLegalMoves(state.turn);
@@ -165,6 +229,7 @@ function goToMove(index) {
 			const undoneMove = state.moveHistory.pop();
 			state.redoStack.push(undoneMove);
 			state.positionHistory.pop();
+			popRepetition();
 		}
 		
 		if (index === -1) {
@@ -212,6 +277,7 @@ function resetToInitialPosition() {
 	// Save initial FEN
 	const initialFEN = boardToFEN();
 	state.positionHistory = [initialFEN];
+	rebuildRepetitionTracker();
 }
 
 function restoreFromFEN(fen) {
@@ -396,6 +462,7 @@ function makeMoveAndRecord(move) {
 	// Save FEN for this position
 	const currentFEN = boardToFEN();
 	state.positionHistory.push(currentFEN);
+	pushRepetitionFromFEN(currentFEN);
 	
 	// Training notes for human moves
 	if (!state.aiEnabled || moverColor !== state.aiColor) {
@@ -417,6 +484,9 @@ if (!state.positionHistory || state.positionHistory.length === 0) {
     const currentFEN = boardToFEN();
     state.positionHistory = [currentFEN];
 }
+
+// Keep repetition tracker in sync on initial load.
+rebuildRepetitionTracker();
 
 	function resetBoard() {
 		clearTrainingNotes();
@@ -651,6 +721,15 @@ const DrawDetection = (() => {
 	
 	function isDrawByRepetition() {
 		if (typeof state === 'undefined') return false;
+		try {
+			ensureRepetitionTracker();
+			if (state.repetition && state.repetition.stack && state.repetition.stack.length) {
+				const key = state.repetition.stack[state.repetition.stack.length - 1];
+				return (state.repetition.counts[key] || 0) >= 3;
+			}
+		} catch (e) {
+			// Fall back to slow path below.
+		}
 		
 		const positions = {};
 		let board = createEmptyBoard();
