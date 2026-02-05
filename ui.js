@@ -8235,7 +8235,17 @@ function renderMoveList() {
     explorer.style.display = isOpen ? 'none' : 'block';
     if (!isOpen) {
       renderExplorerResults();
-      setTimeout(() => { try { explorerFilter.focus(); } catch (e) { /* ignore */ } }, 0);
+    // On Android, auto-focusing an input pops up the keyboard.
+    // Only auto-focus on non-touch (desktop) environments.
+    let isCoarse = false;
+    try {
+    isCoarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+      ('ontouchstart' in window);
+    } catch (e) { /* ignore */ }
+    if (!isCoarse) {
+    setTimeout(() => { try { explorerFilter.focus(); } catch (e) { /* ignore */ } }, 0);
+    }
     }
   };
   explorerClose.onclick = () => { explorer.style.display = 'none'; };
