@@ -8136,11 +8136,47 @@ function renderMoveList() {
   const explorerFilter = document.createElement('input');
   explorerFilter.id = 'openings-explorer-filter';
   explorerFilter.type = 'text';
+  explorerFilter.inputMode = 'search';
   explorerFilter.placeholder = 'Filter openings (e.g. B90, Najdorf)';
   explorerFilter.style.flex = '1';
   explorerFilter.style.fontSize = '12px';
   explorerFilter.style.padding = '4px 8px';
   explorerFilter.style.borderRadius = '6px';
+
+  // Android quirk: sometimes opening the explorer causes the keyboard to appear
+  // because an input ends up focused. Keep the filter readOnly on touch devices
+  // unless the user explicitly taps the field.
+  let __isCoarsePointer = false;
+  try {
+	__isCoarsePointer = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+		(typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+		('ontouchstart' in window);
+  } catch (e) { /* ignore */ }
+  // On Android, just having a visible input near the tap target can steal focus
+  // (especially when opening on pointer events) and pop up the keyboard.
+  // On coarse/touch pointers, replace the inline input with a safe button that
+  // uses a prompt only when the user explicitly wants to type.
+  let explorerFilterBtn = null;
+  if (__isCoarsePointer) {
+  explorerFilter.disabled = true;
+  explorerFilter.style.display = 'none';
+  explorerFilterBtn = document.createElement('button');
+  explorerFilterBtn.type = 'button';
+  explorerFilterBtn.textContent = 'Filter…';
+  explorerFilterBtn.style.flex = '1';
+  explorerFilterBtn.style.fontSize = '12px';
+  explorerFilterBtn.style.padding = '4px 8px';
+  explorerFilterBtn.style.borderRadius = '6px';
+  explorerFilterBtn.style.cursor = 'pointer';
+  explorerFilterBtn.addEventListener('click', (e) => {
+    try { e.preventDefault(); e.stopPropagation(); } catch (err) { /* ignore */ }
+    const current = explorerFilter.value || '';
+    const next = prompt('Filter openings (ECO, name, moves):', current);
+    if (next === null) return;
+    explorerFilter.value = String(next);
+    renderExplorerResults();
+  });
+  }
 
   const explorerGroup = document.createElement('select');
   explorerGroup.id = 'openings-explorer-group';
@@ -8161,7 +8197,8 @@ function renderMoveList() {
   explorerClose.style.borderRadius = '6px';
   explorerClose.style.cursor = 'pointer';
 
-  explorerHeader.appendChild(explorerFilter);
+  if (explorerFilterBtn) explorerHeader.appendChild(explorerFilterBtn);
+  else explorerHeader.appendChild(explorerFilter);
   explorerHeader.appendChild(explorerGroup);
   explorerHeader.appendChild(explorerClose);
 
@@ -8230,21 +8267,24 @@ function renderMoveList() {
     }
   }
 
-  openExplorerBtn.onclick = () => {
+  const __toggleExplorer = (ev) => {
+    try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (e) { /* ignore */ }
     const isOpen = explorer.style.display !== 'none';
     explorer.style.display = isOpen ? 'none' : 'block';
     if (!isOpen) {
-      // Prevent Android keyboard from popping up when opening the explorer.
-      // Only show the keyboard if the user explicitly taps the filter field.
+      // Defensive blur: if any input was focused, drop it so the keyboard stays hidden.
       try {
         const ae = document.activeElement;
         if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
       } catch (e) { /* ignore */ }
-      try { explorerFilter.blur(); } catch (e) { /* ignore */ }
+	  try { explorerFilter.blur(); } catch (e) { /* ignore */ }
 
       renderExplorerResults();
     }
   };
+
+  // Use click (not pointerdown) so the release doesn't retarget onto newly shown elements.
+  openExplorerBtn.addEventListener('click', __toggleExplorer);
   explorerClose.onclick = () => { explorer.style.display = 'none'; };
   explorerFilter.addEventListener('input', renderExplorerResults);
   explorerGroup.addEventListener('change', renderExplorerResults);
@@ -8924,6 +8964,7 @@ attachUIButtons();
     if (panelKey) _mobileNavState.lastPanel = panelKey;
     drawer.classList.add('open');
     scrim.classList.add('show');
+	try { document.body.classList.add('drawer-open'); } catch (e) { /* ignore */ }
     drawer.setAttribute('aria-hidden', 'false');
     scrim.setAttribute('aria-hidden', 'false');
     setBoardInput(false);
@@ -8938,6 +8979,7 @@ attachUIButtons();
 
     drawer.classList.remove('open');
     scrim.classList.remove('show');
+	try { document.body.classList.remove('drawer-open'); } catch (e) { /* ignore */ }
     drawer.setAttribute('aria-hidden', 'true');
     scrim.setAttribute('aria-hidden', 'true');
     setBoardInput(!state.menuActive);

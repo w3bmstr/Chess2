@@ -343,6 +343,17 @@
 			padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
 			overflow-y: auto;
 			-webkit-overflow-scrolling: touch;
+			overflow-x: hidden;
+			overscroll-behavior: contain;
+			touch-action: pan-y;
+		}
+		#drawer {
+			overscroll-behavior: contain;
+			touch-action: pan-y;
+		}
+		body.mobile-nav.drawer-open {
+			overflow: hidden;
+			overscroll-behavior: none;
 		}
 		.drawer-content .panel { box-shadow: none; }
 		.drawer-content .history-panel { max-height: none; overflow: visible; }
