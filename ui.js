@@ -8211,9 +8211,13 @@ function renderMoveList() {
   const explorerResults = document.createElement('div');
   explorerResults.id = 'openings-explorer-results';
   explorerResults.style.marginTop = '8px';
-  // Avoid nested scrolling issues on mobile; render a capped list.
-  explorerResults.style.maxHeight = 'none';
-  explorerResults.style.overflow = 'visible';
+  // Make results scrollable on mobile without affecting the background.
+  explorerResults.style.maxHeight = '52vh';
+  explorerResults.style.overflowY = 'auto';
+  explorerResults.style.overflowX = 'hidden';
+  explorerResults.style.webkitOverflowScrolling = 'touch';
+  explorerResults.style.overscrollBehavior = 'contain';
+  explorerResults.style.touchAction = 'pan-y';
 
   explorer.appendChild(explorerHeader);
   explorer.appendChild(explorerMeta);
@@ -8253,15 +8257,15 @@ function renderMoveList() {
       item.tabIndex = 0;
       item.setAttribute('role', 'button');
       const onPick = (ev) => {
-        try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (e) { /* ignore */ }
+		// Don't preventDefault here; it breaks touch scrolling on mobile.
+		try { ev?.stopPropagation?.(); } catch (e) { /* ignore */ }
         applyOpeningLine(o, {
           afterApply: () => {
             explorer.style.display = 'none';
           }
         });
       };
-      item.addEventListener('pointerdown', onPick);
-      item.addEventListener('click', onPick);
+	  item.addEventListener('click', onPick);
       item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') onPick(e); });
       explorerResults.appendChild(item);
     }
