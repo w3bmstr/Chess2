@@ -7958,7 +7958,7 @@ function renderMoveList() {
 
 	// Opening name display
 	const openingName = getOpeningName(moves);
-	let html = `<div style="margin-bottom: 6px; color: var(--accent); font-weight: 600; font-size: 13px; text-align: center;">${openingName}</div>`;
+  let html = `<div id="opening-name" style="margin-bottom: 6px; color: var(--accent); font-weight: 600; font-size: 13px; text-align: center;">${openingName}</div>`;
 
 	html += '<div style="display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 8px; font-size: 12px;">';
 	for (let i = 0; i < moves.length; i += 2) {
@@ -8393,10 +8393,28 @@ searchBox.addEventListener('input', function() {
     if (oldBtnRow) moveList.removeChild(oldBtnRow);
     btnRow.className = 'fen-pgn-btn-row';
 
+
+  const isMobileNav = document.body.classList.contains('mobile-nav');
+  if (isMobileNav) {
+    const header = moveList.querySelector('#opening-name');
+    const anchor = header ? header.nextElementSibling : null;
+    if (anchor) {
+      moveList.insertBefore(btnRow, anchor);
+      moveList.insertBefore(explorer, anchor);
+      moveList.insertBefore(searchBox, anchor);
+      moveList.insertBefore(resultsDiv, anchor);
+    } else {
+      moveList.appendChild(btnRow);
+      moveList.appendChild(explorer);
+      moveList.appendChild(searchBox);
+      moveList.appendChild(resultsDiv);
+    }
+  } else {
     moveList.appendChild(btnRow);
     moveList.appendChild(explorer);
     moveList.appendChild(searchBox);
     moveList.appendChild(resultsDiv);
+  }
     // Scroll to bottom
     moveList.scrollTop = moveList.scrollHeight;
 
