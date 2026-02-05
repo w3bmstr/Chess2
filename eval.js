@@ -245,126 +245,8 @@ function isKingSafe(color, kingPos, board, COLS, ROWS) {
 		return n;
 	}
 
-	function evalPawns(board) {
-		const filesW = Array.from({ length: COLS }, () => []);
-		const filesB = Array.from({ length: COLS }, () => []);
-		for (let y = 0; y < ROWS; y++) {
-			for (let x = 0; x < COLS; x++) {
-				const pc = board[y][x];
-				if (!pc || pc.type !== "P") continue;
-				if (pc.color === LIGHT) filesW[x].push(y);
-				else filesB[x].push(y);
-			}
-		}
-
-		// Pawn structure tuning (scaled to centipawns, mindful of PST/king safety weights)
-		const ISOLATED = 14;
-		const DOUBLED = 12;
-		const BACKWARD = 10;
-		const PASSED_BASE = 20;
-		const PASSED_SCALE = 5;
-		const SUPPORT = 6;
-
-		const evalSide = (self, enemy, color) => {
-			let s = 0;
-			const dir = color === LIGHT ? -1 : 1;
-			for (let file = 0; file < COLS; file++) {
-				const ranks = self[file];
-				if (!ranks.length) continue;
-				if (ranks.length > 1) s -= DOUBLED * (ranks.length - 1);
-				const hasAdjFriendly = (self[file - 1]?.length || 0) > 0 || (self[file + 1]?.length || 0) > 0;
-				const isolatedFile = !hasAdjFriendly;
-				for (const y of ranks) {
-					if (isolatedFile) s -= ISOLATED;
-					const supportRank = y - dir;
-					const supported = (self[file - 1]?.some(r => r === supportRank) || self[file + 1]?.some(r => r === supportRank));
-					if (supported) s += SUPPORT;
-					const enemyAhead = (f) => enemy[f]?.some(r => color === LIGHT ? r < y : r > y) || false;
-					const passed = !enemyAhead(file) && !enemyAhead(file - 1) && !enemyAhead(file + 1);
-					if (passed) {
-						const advance = color === LIGHT ? (7 - y) : y;
-						s += PASSED_BASE + advance * PASSED_SCALE;
-						continue;
-					}
-					const friendlyAheadSameFile = self[file].some(r => color === LIGHT ? r < y : r > y);
-					if (!isolatedFile && !friendlyAheadSameFile) {
-						const blockedAhead = enemyAhead(file) || enemyAhead(file - 1) || enemyAhead(file + 1);
-						if (blockedAhead) s -= BACKWARD;
-					}
-				}
-			}
-			return s;
-		};
-
-			// --- Advanced Evaluation Heuristics ---
-			// King safety: pawn shield, open files near king
-			function kingPawnShield(king, color) {
-				if (!king) return 0;
-				let shield = 0;
-				const dir = color === LIGHT ? 1 : -1;
-				for (let dx = -1; dx <= 1; dx++) {
-					const x = king.x + dx, y = king.y + dir;
-					if (x < 0 || x >= COLS || y < 0 || y >= ROWS) continue;
-					const pc = board[y][x];
-					if (pc && pc.type === "P" && pc.color === color) shield += 1;
-				}
-				return shield;
-			}
-			let kingSafetyScore = 0;
-			for (const color of [LIGHT, DARK]) {
-				const king = kingPos[color];
-				const shield = kingPawnShield(king, color);
-				// Penalize missing shield, bonus for full shield
-				kingSafetyScore += (color === povColor ? 1 : -1) * (shield === 3 ? 10 : (3 - shield) * -12);
-			}
-			score += kingSafetyScore;
-
-			// Passed pawn bonus: scale with rank and support
-			function passedPawnBonus(p, color) {
-				const rank = color === LIGHT ? 7 - p.y : p.y;
-				let bonus = 0;
-				if (isPassedPawn(board, p, color)) {
-					bonus += 18 + rank * 6;
-					// Supported passed pawn
-					for (const dx of [-1, 1]) {
-						const sx = p.x + dx, sy = p.y + (color === LIGHT ? 1 : -1);
-						if (sx >= 0 && sx < COLS && sy >= 0 && sy < ROWS) {
-							const pc = board[sy][sx];
-							if (pc && pc.type === "P" && pc.color === color) bonus += 8;
-						}
-					}
-				}
-				return bonus;
-			}
-			let passedScore = 0;
-			for (const p of pawns[LIGHT]) passedScore += passedPawnBonus(p, LIGHT);
-			for (const p of pawns[DARK]) passedScore -= passedPawnBonus(p, DARK);
-			score += passedScore;
-
-			// Mobility: count legal moves for each side
-			function mobility(color) {
-				let mob = 0;
-				for (let y = 0; y < ROWS; y++) {
-					for (let x = 0; x < COLS; x++) {
-						const pc = board[y][x];
-						if (!pc || pc.color !== color) continue;
-						const moves = genPseudoMovesForSquare(x, y, board, state?.castling, state?.enPassant);
-						mob += moves.length;
-					}
-				}
-				return mob;
-			}
-			const mobW = mobility(LIGHT), mobB = mobility(DARK);
-			score += (mobW - mobB) * 1.2 * aggressionScale;
-
-			// Outpost, space, and PST blending are already present below
-
-			// Apply contempt: bias evaluation away from draws when ahead
-			if (typeof CONTEMPT !== 'undefined' && CONTEMPT && povColor !== undefined) {
-				score += (povColor === LIGHT ? 1 : -1) * CONTEMPT;
-			}
-			return score;
-	}
+	// NOTE: Legacy evalPawns() removed: it was unused and contained stale references
+	// (kingPos/pawns/aggressionScale) that could crash if reintroduced.
 
 	function evaluateBoard(board, povColor) {
 			// ...existing code...
@@ -719,51 +601,8 @@ function isDefended(board, x, y, color) {
 				const pc = board[y][x];
 				if (!pc) continue;
 				
-				// --- Tactical Safety Layer ---
-const color = pc.color;
-const enemy = color === LIGHT ? DARK : LIGHT;
-
-const attacked = isAttacked(board, x, y, color);
-const defended = isDefended(board, x, y, color);
-
-// Hanging piece penalty
-if (attacked && !defended) {
-    if (pc.type === "Q") score -= 120;
-    else if (pc.type === "R") score -= 80;
-    else if (pc.type === "B" || pc.type === "N") score -= 60;
-    else score -= 30;
-}
-
-// Queen danger (simple version)
-if (pc.type === "Q") {
-    if (attacked) score -= 60;
-
-    let safe = false;
-    const moves = genPseudoMovesForSquare(x, y, board, state.castling, state.enPassant);
-    for (const mv of moves) {
-        const tx = mv.to.x, ty = mv.to.y;
-        if (!isAttacked(board, tx, ty, color)) {
-            safe = true;
-            break;
-        }
-    }
-    if (!safe) score -= 120;
-}
-
-// --- SEE Capture Penalty (uses full SEE from search.js) ---
-{
-    const moves = genPseudoMovesForSquare(x, y, board, state.castling, state.enPassant);
-    for (const mv of moves) {
-        if (mv.capture || mv.enPassant) {
-            const seeScore = see(board, mv);
-            if (seeScore < 0) {
-                score += (pc.color === povColor ? seeScore : -seeScore);
-            }
-        }
-    }
-}
-
-// --- End Tactical Safety Layer ---
+				// Tactical safety is handled later via a single hanging-piece pass;
+				// avoid per-piece SEE scanning here (very expensive and double-counting).
 
 				const idx = y * 8 + x;
 				const material = (PIECE_VALUES[pc.type] || 0) * 100;
@@ -792,6 +631,15 @@ if (pc.type === "Q") {
 			}
 		}
 
+		// Now that piece lists and king positions are known, compute aggressionScale.
+		aggressionScale = 0.5;
+		const oppColor2 = povColor === LIGHT ? DARK : LIGHT;
+		if (kingPos[povColor] && kingPos[oppColor2]) {
+			const myKingSafe = isKingSafe(povColor, kingPos, board, COLS, ROWS);
+			const oppKingExposed = isKingExposed(kingPos[oppColor2], oppColor2);
+			if (myKingSafe && oppKingExposed) aggressionScale = 1.5;
+			else if (myKingSafe) aggressionScale = 1.0;
+		}
 
 		    // --- Development Bonus ---
     score += evaluateDevelopment(board, knights, bishops, rooks, queens, kingPos, povColor);
@@ -799,22 +647,24 @@ if (pc.type === "Q") {
     // --- Center Control ---
     score += evaluateCenterControl(board, povColor);
 	    // --- Mobility Scoring ---
-    score += evaluateMobility(board, povColor);
+	// Mobility is already included in evaluateActivity(); avoid double-counting here.
     // --- King Safety Scaling ---
-    score += evaluateKingSafety(board, kingPos, povColor, phase);
+	const kingSafetyScale = evaluateKingSafetyPhase(phase);
    
     // --- Rook Activity ---
     score += evaluateRookActivity(board, rooks, pawns, povColor);
 
-		const ph = Math.max(0, Math.min(MAX_PHASE, phase));
-		const blendedPst = (openingScore * ph + endgameScore * (MAX_PHASE - ph)) / MAX_PHASE;
-		score += blendedPst;
-
+		// Pawn structure (TT-backed) should feed into the tapered evaluation.
 		const pawnEval = evaluatePawns(board, pawns, pawnFiles);
 		if (pawnEval) {
 			openingScore += pawnEval.opening * (povColor === LIGHT ? 1 : -1);
 			endgameScore += pawnEval.endgame * (povColor === LIGHT ? 1 : -1);
 		}
+
+		const ph = Math.max(0, Math.min(MAX_PHASE, phase));
+		const mgScale = ph / MAX_PHASE;
+		const blendedPst = (openingScore * ph + endgameScore * (MAX_PHASE - ph)) / MAX_PHASE;
+		score += blendedPst;
 
 		// --- Advanced Pawn Structure ---
 		function advancedPawnStructure(color) {
@@ -837,12 +687,8 @@ if (pc.type === "Q") {
 		}
 		const pawnStructW = advancedPawnStructure(LIGHT);
 		const pawnStructB = advancedPawnStructure(DARK);
-		// Draw-machine: scale down passed pawn bonus unless king is safe and center is closed
-		let passScale = (isKingSafe(LIGHT, kingPos, board, COLS, ROWS) && isKingSafe(DARK, kingPos, board, COLS, ROWS) && isCenterClosed()) ? 1.0 : 0.5;
-		score += (pawnStructW.pass - pawnStructB.pass) * 18 * passScale;
-		score -= (pawnStructW.iso - pawnStructB.iso) * 10;
-		score -= (pawnStructW.dbl - pawnStructB.dbl) * 8;
-		score -= (pawnStructW.bwd - pawnStructB.bwd) * 7;
+		// Avoid double-counting pawn structure: isolated/doubled/backward/passed are already covered
+		// by evaluatePawnStructure() via pawnEval. Keep only the connected-pawn signal here.
 		score += (pawnStructW.conn - pawnStructB.conn) * 4;
 
 		// --- Outpost Detection ---
@@ -881,7 +727,8 @@ if (pc.type === "Q") {
 		}
 		const kingZoneW = kingZoneAttackCount(kingPos[LIGHT], LIGHT);
 		const kingZoneB = kingZoneAttackCount(kingPos[DARK], DARK);
-		score -= (kingZoneW - kingZoneB) * 10;
+		// King zone pressure is a middlegame concept; scale it down in endgames.
+		score -= (kingZoneW - kingZoneB) * 10 * kingSafetyScale;
 
 		// --- Space Advantage (draw-machine: scale down unless king is safe and center is closed) ---
 		function isCenterClosed() {
@@ -912,7 +759,7 @@ if (pc.type === "Q") {
 		const spaceB = spaceAdvantage(DARK);
 		let spaceScale = 1.0;
 		if (!isKingSafe(LIGHT, kingPos, board, COLS, ROWS) || !isKingSafe(DARK, kingPos, board, COLS, ROWS) || !isCenterClosed()) spaceScale = 0.4;
-		score += (spaceW - spaceB) * 2.5 * spaceScale;
+		score += (spaceW - spaceB) * 2.5 * spaceScale * mgScale;
 
 		// --- Initiative (move count in enemy half) ---
 		function initiative(color) {
@@ -932,38 +779,18 @@ if (pc.type === "Q") {
 		}
 		const initW = initiative(LIGHT);
 		const initB = initiative(DARK);
-		score += (initW - initB) * 1.5 * aggressionScale;
+		score += (initW - initB) * 1.5 * aggressionScale * mgScale;
 
-		// --- Dynamic Imbalances (bishop pair, rook on open file, queen activity) ---
+		// --- Dynamic Imbalances (queen activity) ---
 		let imbalance = 0;
-		if (bishopCount[LIGHT] >= 2) imbalance += 10;
-		if (bishopCount[DARK] >= 2) imbalance -= 10;
-		for (const r of rooks[LIGHT]) if (isFileOpen(pawnFiles, LIGHT, r.x)) imbalance += 6;
-		for (const r of rooks[DARK]) if (isFileOpen(pawnFiles, DARK, r.x)) imbalance -= 6;
 		// Draw-machine: Only reward queen activity if king is safe (castled and shielded)
-		function isKingSafe(color) {
-			const king = kingPos[color];
-			if (!king) return false;
-			// Consider castled if on g1/c1/g8/c8
-			if ((color === LIGHT && king.y === 7 && (king.x === 6 || king.x === 2)) ||
-				(color === DARK && king.y === 0 && (king.x === 6 || king.x === 2))) {
-				// Check pawn shield
-				let shield = 0;
-				const dir = color === LIGHT ? -1 : 1;
-				for (let dx = -1; dx <= 1; dx++) {
-					const x = king.x + dx, y = king.y + dir;
-					if (x < 0 || x >= COLS || y < 0 || y >= ROWS) continue;
-					const pc = board[y][x];
-					if (pc && pc.type === "P" && pc.color === color) shield++;
-				}
-				return shield >= 2;
-			}
-			return false;
+		function isKingSafeForQueenActivity(color) {
+			return isKingSafe(color, kingPos, board, COLS, ROWS);
 		}
-		if (isKingSafe(LIGHT, kingPos, board, COLS, ROWS)) {
+		if (isKingSafeForQueenActivity(LIGHT)) {
 			for (const q of queens[LIGHT]) if (q.y < 4) imbalance += 4;
 		}
-		if (isKingSafe(DARK, kingPos, board, COLS, ROWS)) {
+		if (isKingSafeForQueenActivity(DARK)) {
 			for (const q of queens[DARK]) if (q.y > 3) imbalance -= 4;
 		}
 		score += imbalance;
@@ -971,8 +798,8 @@ if (pc.type === "Q") {
 		if (bishopCount[LIGHT] >= 2) score += BISHOP_PAIR_BONUS * (povColor === LIGHT ? 1 : -1);
 		if (bishopCount[DARK] >= 2) score -= BISHOP_PAIR_BONUS * (povColor === LIGHT ? 1 : -1);
 
-		if (kingPos[LIGHT]) score += evaluateKingSafety(board, kingPos[LIGHT], LIGHT, pawnFiles, rooks, queens, bishops, knights) * (povColor === LIGHT ? 1 : -1);
-		if (kingPos[DARK]) score += evaluateKingSafety(board, kingPos[DARK], DARK, pawnFiles, rooks, queens, bishops, knights) * (povColor === DARK ? 1 : -1);
+		if (kingPos[LIGHT]) score += evaluateKingSafetyDetailed(board, kingPos[LIGHT], LIGHT, pawnFiles, rooks, queens, bishops, knights) * kingSafetyScale * (povColor === LIGHT ? 1 : -1);
+		if (kingPos[DARK]) score += evaluateKingSafetyDetailed(board, kingPos[DARK], DARK, pawnFiles, rooks, queens, bishops, knights) * kingSafetyScale * (povColor === DARK ? 1 : -1);
 
 		// Hanging piece penalty (after score and piece lists are built)
 		let hangingPenalty = 0;
@@ -989,18 +816,7 @@ if (pc.type === "Q") {
 		}
 		score += hangingPenalty;
 
-		const rookActivity = (color) => {
-			let s = 0;
-			for (const r of rooks[color]) {
-				const open = isFileOpen(pawnFiles, color, r.x);
-				const semi = isFileSemiOpen(pawnFiles, color, r.x);
-				if (open) s += ROOK_OPEN_BONUS;
-				else if (semi) s += ROOK_SEMI_BONUS;
-			}
-			return s;
-		};
-		score += rookActivity(LIGHT) * (povColor === LIGHT ? 1 : -1);
-		score -= rookActivity(DARK) * (povColor === LIGHT ? 1 : -1);
+		// Rook open/semi-open file activity is handled by evaluateRookActivity(); avoid double-counting here.
 
 		const activityScore = evaluateActivity(board, pawns, knights, bishops, rooks, queens, kingPos, MOBILITY_WEIGHT, KNIGHT_CENTER_BONUS, LONG_DIAG_WEIGHT);
 		score += activityScore * (povColor === LIGHT ? 1 : -1) * aggressionScale;
@@ -1554,14 +1370,12 @@ function probeTablebase(board, povColor) {
 			}
 			for (const p of pawns[LIGHT]) {
 				let bonus = (6 - p.y) * endgameScale * 1.5;
-				if (isPassedPawn(board, p, LIGHT)) bonus += 30 * endgameScale;
 				if (isConnectedPassedPawn(p, LIGHT, pawns[LIGHT])) bonus += 18 * endgameScale;
 				bonus += pawnPromotionBonus(p, LIGHT);
 				score += bonus * (povColor === LIGHT ? 1 : -1);
 			}
 			for (const p of pawns[DARK]) {
 				let bonus = p.y * endgameScale * 1.5;
-				if (isPassedPawn(board, p, DARK)) bonus += 30 * endgameScale;
 				if (isConnectedPassedPawn(p, DARK, pawns[DARK])) bonus += 18 * endgameScale;
 				bonus += pawnPromotionBonus(p, DARK);
 				score -= bonus * (povColor === LIGHT ? 1 : -1);
@@ -1598,9 +1412,6 @@ function probeTablebase(board, povColor) {
 			const cB = pawnFiles[DARK][file];
 			if (cW > 1) white -= (cW - 1) * doubledPenalty;
 			if (cB > 1) black -= (cB - 1) * doubledPenalty;
-			// Penalty for pawn islands
-			if (cW > 0 && (file === 0 || pawnFiles[LIGHT][file - 1] === 0) && (file === COLS - 1 || pawnFiles[LIGHT][file + 1] === 0)) white -= 8;
-			if (cB > 0 && (file === 0 || pawnFiles[DARK][file - 1] === 0) && (file === COLS - 1 || pawnFiles[DARK][file + 1] === 0)) black -= 8;
 		}
 
 		const applyPawn = (color, list) => {
@@ -1630,11 +1441,9 @@ function probeTablebase(board, povColor) {
 		return white - black;
 	}
 
-	function evaluateKingSafety(board, kingPos, color, pawnFiles, rooks, queens, bishops, knights) {
+	function evaluateKingSafetyDetailed(board, kingPos, color, pawnFiles, rooks, queens, bishops, knights) {
 		const enemy = color === LIGHT ? DARK : LIGHT;
 		const forward = color === LIGHT ? -1 : 1;
-		const total = totalPieces(board);
-		const safetyScale = Math.max(0.35, Math.min(1, (total - 6) / 20));
 		let penalty = 0;
 
 		// Pawn shield in front of king
@@ -1674,7 +1483,7 @@ function probeTablebase(board, povColor) {
 			if (dist <= 2) penalty += 10;
 		}
 
-		return -penalty * safetyScale;
+		return -penalty;
 	}
 
 	function evaluateActivity(board, pawns, knights, bishops, rooks, queens, kingPos, mobilityWeight, knightCenterBonus, diagWeight) {
@@ -1951,62 +1760,11 @@ function evaluateMobility(board, povColor) {
     return score;
 }
 
-function evaluateKingSafety(board, kingPos, povColor, phase) {
-    let score = 0;
-
-    // Scaling: king safety matters more in middlegame
-    const mgScale = Math.min(1, phase / 20); // 0 = endgame, 1 = middlegame
-
-    function kingSafetyFor(color) {
-        const king = kingPos[color];
-        if (!king) return 0;
-
-        const enemy = color === LIGHT ? DARK : LIGHT;
-        let danger = 0;
-
-        // 1. Pawn shield
-        const dir = color === LIGHT ? -1 : 1;
-        const shieldRanks = [king.y + dir, king.y + 2 * dir];
-
-        for (const r of shieldRanks) {
-            if (r < 0 || r >= ROWS) continue;
-            for (let x = king.x - 1; x <= king.x + 1; x++) {
-                if (x < 0 || x >= COLS) continue;
-                const pc = board[r][x];
-                if (!pc || pc.type !== "P" || pc.color !== color) {
-                    danger += 6; // missing pawn shield
-                }
-            }
-        }
-
-        // 2. Open files toward king
-        for (let y = 0; y < ROWS; y++) {
-            const pc = board[y][king.x];
-            if (!pc) continue;
-            if (pc.color === enemy && (pc.type === "R" || pc.type === "Q")) {
-                danger += 12;
-            }
-        }
-
-        // 3. Attacks around king
-        let attackCount = 0;
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                if (dx === 0 && dy === 0) continue;
-                const x = king.x + dx, y = king.y + dy;
-                if (x < 0 || x >= COLS || y < 0 || y >= ROWS) continue;
-                if (isAttacked(board, x, y, color)) attackCount++;
-            }
-        }
-        danger += attackCount * 10;
-
-        return -danger * mgScale;
-    }
-
-    score += kingSafetyFor(povColor);
-    score -= kingSafetyFor(povColor === LIGHT ? DARK : LIGHT);
-
-    return score;
+function evaluateKingSafetyPhase(phase) {
+	// Returns a scale factor (unitless) applied to king-safety penalties.
+	// Goal: king safety is middlegame-heavy, endgame-light.
+	const mg = Math.max(0, Math.min(1, phase / 20));
+	return 0.15 + 0.85 * mg; // 0.15 in pure endgames, up to 1.0 in middlegame
 }
 function evaluateRookActivity(board, rooks, pawns, povColor) {
     let score = 0;
@@ -2021,7 +1779,7 @@ function evaluateRookActivity(board, rooks, pawns, povColor) {
     function rookScore(rook, color) {
         let s = 0;
         const file = rook.x;
-        const rank = rook.y;
+		const rank = rook.y;
 
         const friendlyPawns = color === LIGHT ? pawnFilesWhite : pawnFilesBlack;
         const enemyPawns = color === LIGHT ? pawnFilesBlack : pawnFilesWhite;
@@ -2031,10 +1789,6 @@ function evaluateRookActivity(board, rooks, pawns, povColor) {
 
         // Open file: no pawns at all
         if (!friendlyPawns.has(file) && !enemyPawns.has(file)) s += 18;
-
-        // 7th rank pressure
-        if (color === LIGHT && rank === 1) s += 20;
-        if (color === DARK && rank === 6) s += 20;
 
         return s;
     }

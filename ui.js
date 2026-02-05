@@ -5,6 +5,13 @@
 
 let autoPlayActive = false;
 let autoPlayTimer = null;
+let autoPlayThinkToken = 0;
+let _autoPlayMakingMove = false;
+
+function scheduleAutoPlayStep(delayMs) {
+  if (autoPlayTimer) clearTimeout(autoPlayTimer);
+  autoPlayTimer = setTimeout(autoPlayStep, Math.max(0, delayMs | 0));
+}
 
 // Track last move arrow timestamp
 let lastMoveArrowTimestamp = 0;
@@ -15,27 +22,96 @@ function autoPlayStep() {
 		updateAutoPlayButton();
 		return;
 	}
+  // Avoid overlapping search cycles (can cause out-of-turn / illegal moves).
+  if (state.thinking) {
+    scheduleAutoPlayStep(50);
+    return;
+  }
 	state.aiEnabled = true;
 	state.aiColor = state.turn;
 	state.menuActive = false;
 	setBoardInput(false);
 	const { thinkTimeMs } = getDifficultySettings(state.aiLevel);
 	state.thinking = true;
+  const myToken = ++autoPlayThinkToken;
 	setTimeout(() => {
-		const mv = aiChooseMove();
-		if (mv) {
-			makeMove(mv);
-			syncTrainingNotes?.();
-		}
-		state.thinking = false;
-		render();
-		updateHud();
-		if (autoPlayActive && !state.gameOver) {
-			autoPlayTimer = setTimeout(autoPlayStep, 200); // Short delay between moves
-		} else {
-			autoPlayActive = false;
-			updateAutoPlayButton();
-		}
+    if (!autoPlayActive || state.gameOver) {
+      state.thinking = false;
+      return;
+    }
+    // If a newer auto-play cycle started, drop this stale callback.
+    if (myToken !== autoPlayThinkToken) {
+      state.thinking = false;
+      return;
+    }
+
+    // Preferred: compute in Worker (keeps UI responsive).
+    if (ensureAIWorker()) {
+      const snapshot = snapshotForAIWorker();
+      const settings = getDifficultySettings(state.aiLevel);
+      postAIWorkerRequest({
+        type: 'search',
+        token: myToken,
+        snapshot,
+        settings,
+        aiColor: state.turn,
+        aiLevel: state.aiLevel
+      }, {
+        onResult: (msg) => {
+          if (!autoPlayActive || state.gameOver) { state.thinking = false; return; }
+          if (myToken !== autoPlayThinkToken) { state.thinking = false; return; }
+
+          const mv = msg.move;
+          if (mv) {
+            try {
+              _autoPlayMakingMove = true;
+              makeMove(mv);
+            } finally {
+              _autoPlayMakingMove = false;
+            }
+            try { syncTrainingNotes?.(); } catch (e) { /* ignore */ }
+          }
+
+          state.thinking = false;
+          render();
+          updateHud();
+
+          if (autoPlayActive && !state.gameOver) {
+            scheduleAutoPlayStep(200); // Short delay between moves
+          } else {
+            autoPlayActive = false;
+            updateAutoPlayButton();
+          }
+        },
+        onError: () => {
+          state.thinking = false;
+          autoPlayActive = false;
+          updateAutoPlayButton();
+        }
+      });
+      return;
+    }
+
+    // Fallback (file://): synchronous search on main thread.
+    const mv = aiChooseMove();
+    if (mv) {
+      try {
+        _autoPlayMakingMove = true;
+        makeMove(mv);
+      } finally {
+        _autoPlayMakingMove = false;
+      }
+      syncTrainingNotes?.();
+    }
+    state.thinking = false;
+    render();
+    updateHud();
+    if (autoPlayActive && !state.gameOver) {
+      scheduleAutoPlayStep(200); // Short delay between moves
+    } else {
+      autoPlayActive = false;
+      updateAutoPlayButton();
+    }
 	}, thinkTimeMs);
 }
 
@@ -43,10 +119,11 @@ function toggleAutoPlay() {
 	autoPlayActive = !autoPlayActive;
 	updateAutoPlayButton();
 	if (autoPlayActive) {
-		autoPlayStep();
+    scheduleAutoPlayStep(0);
 	} else {
 		if (autoPlayTimer) clearTimeout(autoPlayTimer);
 		autoPlayTimer = null;
+    autoPlayThinkToken++;
 	}
 }
 
@@ -91,9 +168,10 @@ if (_originalMakeMove) {
 		}
 		const result = _originalMakeMove(mv);
 		// If auto-play is active and game is not over, continue auto-play
-		if (autoPlayActive && !state.gameOver) {
-			if (autoPlayTimer) clearTimeout(autoPlayTimer);
-			autoPlayTimer = setTimeout(autoPlayStep, 200);
+    if (autoPlayActive && !state.gameOver && !_autoPlayMakingMove) {
+      // Manual move while auto-play is running: keep it going, but don't create
+      // duplicate cycles when auto-play itself makes the move.
+      scheduleAutoPlayStep(200);
 		}
 		return result;
 	};
@@ -101,6 +179,7 @@ if (_originalMakeMove) {
 const _originalResetBoard = typeof resetBoard === 'function' ? resetBoard : null;
 if (_originalResetBoard) {
 	window.resetBoard = function() {
+    try { if (typeof window.abortSearch === 'function') window.abortSearch(); } catch (e) { /* ignore */ }
 		if (autoPlayActive) {
 			autoPlayActive = false;
 			updateAutoPlayButton();
@@ -109,6 +188,314 @@ if (_originalResetBoard) {
 		}
 		return _originalResetBoard();
 	};
+}
+
+function _abortSearchIfAny() {
+  try { if (typeof window.abortSearch === 'function') window.abortSearch(); } catch (e) { /* ignore */ }
+  // Also cancel any pending AI move timers so navigation (goToMove, undo, etc.) works immediately.
+  try {
+    if (typeof window.__aiThinkToken === 'number') window.__aiThinkToken++;
+    if (typeof window.__aiThinkTimer !== 'undefined' && window.__aiThinkTimer) {
+      clearTimeout(window.__aiThinkTimer);
+      window.__aiThinkTimer = null;
+    }
+    if (state && state.thinking) state.thinking = false;
+  } catch (e) { /* ignore */ }
+}
+
+// ============================================================================
+// AI Worker (runs engine search off the main thread)
+// ============================================================================
+
+let __aiWorker = null;
+let __aiWorkerReqId = 0;
+let __aiWorkerInitFailed = false;
+let __aiWorkerInitWarned = false;
+const __aiWorkerPending = new Map();
+
+function __aiWorkerNextId() {
+  __aiWorkerReqId += 1;
+  return __aiWorkerReqId;
+}
+
+function __aiWorkerDispatchMessage(msg) {
+  if (!msg || typeof msg !== 'object') return;
+  const requestId = msg.requestId;
+  if (requestId && __aiWorkerPending.has(requestId)) {
+    const pending = __aiWorkerPending.get(requestId);
+    __aiWorkerPending.delete(requestId);
+    if (msg.type === 'result') {
+      try { pending.onResult && pending.onResult(msg); } catch (e) { /* ignore */ }
+    } else if (msg.type === 'error') {
+      try { pending.onError && pending.onError(msg); } catch (e) { /* ignore */ }
+    }
+    return;
+  }
+
+  // Back-compat path: older worker responses without per-request callbacks.
+  if (msg.type === 'result') {
+    try { handleAIWorkerResult(msg); } catch (e) { /* ignore */ }
+  } else if (msg.type === 'error') {
+    console.warn('[AI Worker] error', msg.error);
+    try { state.thinking = false; } catch (e) { /* ignore */ }
+  }
+}
+
+function ensureAIWorker() {
+  if (__aiWorker) return __aiWorker;
+  if (__aiWorkerInitFailed) return null;
+  if (typeof Worker === 'undefined') return null;
+
+  // Browsers block Workers for file:// origins. Avoid throwing a SecurityError
+  // (and spamming console) by opting out early.
+  try {
+    if (typeof location !== 'undefined' && location && location.protocol === 'file:') {
+      __aiWorkerInitFailed = true;
+      if (!__aiWorkerInitWarned) {
+        __aiWorkerInitWarned = true;
+        console.warn('[AI Worker] disabled for file://. Use a local server (VS Code Live Server).');
+      }
+      return null;
+    }
+  } catch (e) { /* ignore */ }
+
+  try {
+    __aiWorker = new Worker('ai_worker.js');
+    __aiWorker.onmessage = (ev) => {
+      __aiWorkerDispatchMessage(ev.data);
+    };
+    __aiWorker.onerror = (e) => {
+      console.warn('[AI Worker] failed', e && (e.message || e));
+      try { state.thinking = false; } catch (err) { /* ignore */ }
+    };
+    return __aiWorker;
+  } catch (e) {
+    __aiWorkerInitFailed = true;
+    if (!__aiWorkerInitWarned) {
+      __aiWorkerInitWarned = true;
+      console.warn('[AI Worker] could not start (likely file:// restrictions). Use a local server (VS Code Live Server).', e);
+    }
+    __aiWorker = null;
+    return null;
+  }
+}
+
+function snapshotForAIWorker() {
+  // Keep the payload small but sufficient for legality/book/repetition.
+  return {
+    board: state.board,
+    turn: state.turn,
+    castling: state.castling,
+    enPassant: state.enPassant,
+    halfmove: state.halfmove,
+    fullmove: state.fullmove,
+    gameOver: state.gameOver,
+    winner: state.winner,
+    moveHistory: Array.isArray(state.moveHistory)
+      ? state.moveHistory.map(mv => ({
+        from: mv.from,
+        to: mv.to,
+        castle: mv.castle,
+        rookFrom: mv.rookFrom,
+        rookTo: mv.rookTo,
+        enPassant: mv.enPassant,
+        capturePos: mv.capturePos,
+        promo: mv.promo,
+        doubleStep: mv.doubleStep
+      }))
+      : [],
+    positionHistory: Array.isArray(state.positionHistory) ? state.positionHistory : [],
+    repetition: state.repetition || null
+  };
+}
+
+function abortAIWorkerSearch() {
+  try {
+    // Don't try to construct a worker just to abort.
+    if (__aiWorker) __aiWorker.postMessage({ type: 'abort' });
+    __aiWorkerPending.clear();
+  } catch (e) { /* ignore */ }
+}
+
+function postAIWorkerRequest(message, handlers) {
+  const worker = ensureAIWorker();
+  if (!worker) return null;
+  const requestId = __aiWorkerNextId();
+  __aiWorkerPending.set(requestId, {
+    onResult: handlers && handlers.onResult,
+    onError: handlers && handlers.onError
+  });
+  try {
+    worker.postMessage(Object.assign({ requestId }, message));
+    return requestId;
+  } catch (e) {
+    __aiWorkerPending.delete(requestId);
+    return null;
+  }
+}
+
+// Provide a global abortSearch so existing navigation hooks cancel worker searches too.
+if (typeof window.abortSearch !== 'function') {
+  window.abortSearch = function () {
+    abortAIWorkerSearch();
+  };
+}
+
+function handleAIWorkerResult(msg) {
+  // Token checks are owned by maybeRunAI() scheduling.
+  const token = msg.token;
+  if (typeof window.__aiThinkToken === 'number' && token !== window.__aiThinkToken) return;
+  if (!state.aiEnabled || state.menuActive || state.gameOver) { state.thinking = false; return; }
+  if (state.turn !== state.aiColor) { state.thinking = false; return; }
+  const mv = msg.move;
+  if (mv) makeMove(mv);
+  try { syncTrainingNotes(); } catch (e) { /* ignore */ }
+  state.thinking = false;
+}
+
+// ============================================================================
+// Clipboard helpers (PGN/FEN copy must work on http:// too)
+// ============================================================================
+
+function copyTextToClipboard(text) {
+  const str = (text === null || text === undefined) ? '' : String(text);
+
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.left = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+
+      // iOS Safari needs explicit selection range.
+      ta.focus();
+      ta.select();
+      try { ta.setSelectionRange(0, ta.value.length); } catch (e) { /* ignore */ }
+
+      const ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Promise.resolve(!!ok);
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  };
+
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && (window.isSecureContext || location.hostname === 'localhost')) {
+      return navigator.clipboard.writeText(str).then(() => true).catch(() => fallback());
+    }
+  } catch (e) { /* ignore */ }
+  return fallback();
+}
+
+// Generate a minimal PGN for the current game.
+// (We keep this in ui.js so the Copy PGN button always works even if no separate PGN-export module exists.)
+function generatePGN() {
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const d = new Date();
+  const dateTag = `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+  const resultTag = (state && state.gameOver)
+    ? (state.winner === 'White' ? '1-0' : state.winner === 'Black' ? '0-1' : state.winner === 'Draw' ? '1/2-1/2' : '*')
+    : '*';
+
+  const tags = [
+    ['Event', 'Casual Game'],
+    ['Site', (typeof location !== 'undefined' && location.href) ? location.href : 'Local'],
+    ['Date', dateTag],
+    ['Round', '-'],
+    ['White', 'White'],
+    ['Black', 'Black'],
+    ['Result', resultTag]
+  ];
+
+  const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
+  const moveToSanSimple = (mv) => {
+    if (!mv) return '';
+    if (mv.castle === 'kingside') return `O-O${mv.mate ? '#' : mv.check ? '+' : ''}`;
+    if (mv.castle === 'queenside') return `O-O-O${mv.mate ? '#' : mv.check ? '+' : ''}`;
+    const pieceType = mv.piece && mv.piece.type ? mv.piece.type : 'P';
+    const isPawn = pieceType === 'P';
+    const captureMark = (mv.captured || mv.enPassant) ? 'x' : '';
+    const fromFile = isPawn && captureMark ? String.fromCharCode(97 + mv.from.x) : '';
+    const pieceLetter = isPawn ? '' : pieceType;
+    const dest = sq(mv.to.x, mv.to.y);
+    const promo = mv.promo ? `=${mv.promo}` : '';
+    const suffix = mv.mate ? '#' : mv.check ? '+' : '';
+    return `${pieceLetter}${fromFile}${captureMark}${dest}${promo}${suffix}`;
+  };
+
+  const moves = (state && Array.isArray(state.moveHistory)) ? state.moveHistory : [];
+  let body = '';
+  for (let i = 0; i < moves.length; i += 2) {
+    const moveNum = Math.floor(i / 2) + 1;
+    const w = moves[i];
+    const b = moves[i + 1];
+    const wSan = moveToSanSimple(w);
+    const bSan = b ? moveToSanSimple(b) : '';
+    body += `${moveNum}. ${wSan}`;
+    if (w && w.pgnComment) body += ` {${String(w.pgnComment).replace(/[{}]/g, '')}}`;
+    if (bSan) {
+      body += ` ${bSan}`;
+      if (b && b.pgnComment) body += ` {${String(b.pgnComment).replace(/[{}]/g, '')}}`;
+    }
+    body += ' ';
+  }
+  body = body.trim();
+  if (body.length) body += ` ${resultTag}`;
+  else body = resultTag;
+
+  let out = '';
+  for (const [k, v] of tags) out += `[${k} "${String(v).replace(/"/g, "'")}"]\n`;
+  out += `\n${body}\n`;
+  return out;
+}
+
+// Expose for other scripts/UI buttons.
+try { window.generatePGN = generatePGN; } catch (e) { /* ignore */ }
+
+// Abort engine thinking on navigation actions (undo/redo/go-to-start/end)
+const _originalUndo = typeof undo === 'function' ? undo : null;
+if (_originalUndo) {
+  window.undo = function(...args) {
+    _abortSearchIfAny();
+    return _originalUndo.apply(this, args);
+  };
+}
+
+const _originalUndoMove = typeof undoMove === 'function' ? undoMove : null;
+if (_originalUndoMove) {
+  window.undoMove = function(...args) {
+    _abortSearchIfAny();
+    return _originalUndoMove.apply(this, args);
+  };
+}
+
+const _originalRedoMove = typeof redoMove === 'function' ? redoMove : null;
+if (_originalRedoMove) {
+  window.redoMove = function(...args) {
+    _abortSearchIfAny();
+    return _originalRedoMove.apply(this, args);
+  };
+}
+
+const _originalUndoToStart = typeof undoToStart === 'function' ? undoToStart : null;
+if (_originalUndoToStart) {
+  window.undoToStart = function(...args) {
+    _abortSearchIfAny();
+    return _originalUndoToStart.apply(this, args);
+  };
+}
+
+const _originalRedoToEnd = typeof redoToEnd === 'function' ? redoToEnd : null;
+if (_originalRedoToEnd) {
+  window.redoToEnd = function(...args) {
+    _abortSearchIfAny();
+    return _originalRedoToEnd.apply(this, args);
+  };
 }
 // ============================================================================
 // UI: Engine Info Panel
@@ -219,75 +606,8 @@ if (typeof searchBestMove === 'function') {
 }
 
 // Patch aiChooseMove to clear and update info
-if (typeof aiChooseMove === 'function') {
-	const _originalAiChooseMove = aiChooseMove;
-	aiChooseMove = function() {
-		clearEngineInfo();
-		let move = null;
-		let bestEval = 0;
-		let maxDepth = 0;
-		let nodes = 0;
-		// Use Multi-PV if enabled
-		if (multiPVConfig.enabled && multiPVConfig.lines > 1) {
-			const ctx = cloneCtx(state.board, state.castling, state.enPassant);
-			maxDepth = getDifficultySettings(state.aiLevel).searchDepth;
-			const deadline = Date.now() + Math.max(80, getDifficultySettings(state.aiLevel).thinkTimeMs * 1.3);
-			let pvResults = searchMultiPV(
-				ctx,
-				maxDepth,
-				state.aiColor,
-				state.aiColor,
-				deadline,
-				multiPVConfig.lines
-			);
-			if (pvResults && pvResults.length) {
-				move = pvResults[0].move;
-				bestEval = pvResults[0].score;
-				maxDepth = pvResults[0].depth || maxDepth;
-				nodes = pvResults.reduce((sum, pv) => sum + (pv.nodes || 0), 0);
-			}
-		} else {
-			// Single-PV
-			const ctx = cloneCtx(state.board, state.castling, state.enPassant);
-			maxDepth = getDifficultySettings(state.aiLevel).searchDepth;
-			const deadline = Date.now() + Math.max(80, getDifficultySettings(state.aiLevel).thinkTimeMs * 1.3);
-			let best = { move: null, score: 0 };
-			let prevScore = 0;
-			let totalNodes = 0;
-			for (let d = 1; d <= maxDepth; d++) {
-        let aspWindow = 0.40;
-				let alpha = -Infinity;
-				let beta = Infinity;
-				if (d > 1 && Number.isFinite(prevScore)) {
-          alpha = prevScore - aspWindow;
-          beta = prevScore + aspWindow;
-				}
-        let res;
-        const searchFn = (typeof window.searchBestMoveWithInfo === 'function') ? window.searchBestMoveWithInfo : searchBestMove;
-        res = searchFn(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-        // engineInfo.nodes updated by the wrapper (if SEARCH_NODES exists)
-        if (Number.isFinite(engineInfo.nodes)) totalNodes += engineInfo.nodes;
-				if (res && res.move) {
-					best = res;
-					prevScore = res.score;
-					bestEval = res.score;
-					move = res.move;
-					maxDepth = d;
-				}
-				updateEngineInfo({ depth: d, nodes: totalNodes, evalScore: bestEval });
-				if (Date.now() > deadline || res.cut) break;
-			}
-			nodes = totalNodes;
-		}
-		updateEngineInfo({ depth: maxDepth, nodes, evalScore: bestEval });
-		// Fallback to original if needed
-		if (!move && typeof _originalAiChooseMove === 'function') {
-			move = _originalAiChooseMove();
-		}
-		setTimeout(() => clearEngineInfo(), 800); // Clear after move for clarity
-		return move;
-	};
-}
+// NOTE: Do not override aiChooseMove here.
+// When hosted over HTTP/HTTPS, heavy search runs in the Web Worker.
 
 if (document.readyState === 'loading') {
 	document.addEventListener('DOMContentLoaded', createEngineInfoPanel);
@@ -320,6 +640,7 @@ const aiText = document.getElementById("ai-text");
 const msgText = document.getElementById("msg-text");
 const capText = document.getElementById("cap-text");
 const lastMoveText = document.getElementById("lastmove-text");
+const openingText = document.getElementById("opening-text");
 const moveList = document.getElementById("move-list");
 const difficultyMobile = document.getElementById("difficulty-mobile");
 
@@ -2208,38 +2529,7 @@ const OPENINGS =
       "g1d7",
       "c1c4",
       "c7c6",
-      "O-O"
-    ]
-  },
-  {
-    "eco": "C41",
-    "name": "Philidor, Hanham, Steiner variation",
-    "moves": [
-      "e2e4",
-      "e7e5",
-      "b1f3",
-      "d7d6",
-      "d2d4",
-      "g1d7",
-      "c1c4",
-      "c7c6",
       "O-O",
-      "f1e7",
-      "d7e5"
-    ]
-  },
-  {
-    "eco": "C41",
-    "name": "Philidor, Hanham, Kmoch variation",
-    "moves": [
-      "e2e4",
-      "e7e5",
-      "b1f3",
-      "d7d6",
-      "d2d4",
-      "g1d7",
-      "c1c4",
-      "c7c6",
       "b8g5"
     ]
   },
@@ -7352,26 +7642,308 @@ const OPENINGS =
 
 
 
+// ============================================================================
+// Openings: Explorer + Position-based Detection (transposition-safe)
+// ============================================================================
+
+const STARTPOS_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const OPENING_INDEX_MAX_PLIES = 16; // keep indexing fast; enough for most named openings
+
+let __openingIndexBuilt = false;
+let __openingPosIndex = null; // Map(positionKey -> {eco,name,moves,plies})
+let __openingListSorted = null;
+
+function __openingPositionKey(board, turn, castling, enPassant) {
+  let out = '';
+  for (let y = 0; y < ROWS; y++) {
+    let empty = 0;
+    for (let x = 0; x < COLS; x++) {
+      const pc = board[y][x];
+      if (!pc) { empty++; continue; }
+      if (empty) { out += String(empty); empty = 0; }
+      const t = pc.type;
+      const letter = (typeof t === 'string' && t.length) ? t[0].toUpperCase() : '?';
+      out += (pc.color === LIGHT) ? letter : letter.toLowerCase();
+    }
+    if (empty) out += String(empty);
+    if (y < ROWS - 1) out += '/';
+  }
+
+  out += ' ' + (turn === LIGHT ? 'w' : 'b');
+
+  let c = '';
+  try {
+    if (castling?.[LIGHT]?.kingside) c += 'K';
+    if (castling?.[LIGHT]?.queenside) c += 'Q';
+    if (castling?.[DARK]?.kingside) c += 'k';
+    if (castling?.[DARK]?.queenside) c += 'q';
+  } catch (e) { /* ignore */ }
+  out += ' ' + (c || '-');
+
+  if (enPassant && Number.isFinite(enPassant.x) && Number.isFinite(enPassant.y)) {
+    out += ' ' + String.fromCharCode(97 + enPassant.x) + (ROWS - enPassant.y);
+  } else {
+    out += ' -';
+  }
+  return out;
+}
+
+function __openingParseSq(s) {
+  if (typeof s !== 'string' || s.length !== 2) return null;
+  const f = s.charCodeAt(0);
+  const r = s.charCodeAt(1);
+  if (f < 97 || f > 104) return null;
+  if (r < 49 || r > 56) return null;
+  const x = f - 97;
+  const rank = r - 48;
+  const y = 8 - rank;
+  return { x, y };
+}
+
+function __openingFindMoveByToken(token, legalMoves, board, turnColor) {
+  if (!token) return null;
+  if (token === 'O-O' || token === '0-0') return legalMoves.find(m => m.castle === 'kingside') || null;
+  if (token === 'O-O-O' || token === '0-0-0') return legalMoves.find(m => m.castle === 'queenside') || null;
+  if (typeof token !== 'string') return null;
+
+  const stripped = token.replace(/[\+\#\!\?]+$/g, '');
+  const sqStr = (mxy) => String.fromCharCode(97 + mxy.x) + (8 - mxy.y);
+
+  // SAN-ish support (very small subset): e4, Nbd7, exd5, e8=Q
+  // We treat these as "move to <dest>" with optional disambiguation.
+  try {
+    let base = stripped;
+    let promo = null;
+    const eqIdx = base.indexOf('=');
+    if (eqIdx >= 0 && eqIdx + 1 < base.length) {
+      promo = base[eqIdx + 1].toUpperCase();
+      base = base.slice(0, eqIdx);
+    }
+    base = base.replace(/x/g, '');
+    if (base.length >= 2) {
+      const dest = base.slice(-2);
+      const destSq = __openingParseSq(dest);
+      if (destSq) {
+        let mid = base.slice(0, -2);
+        let pieceLetter = null;
+        let disFile = null;
+        let disRank = null;
+        if (mid.length && 'KQRBN'.includes(mid[0])) {
+          pieceLetter = mid[0];
+          mid = mid.slice(1);
+        }
+        if (mid.length && /[a-h]/.test(mid[0])) {
+          disFile = mid[0];
+          mid = mid.slice(1);
+        }
+        if (mid.length && /[1-8]/.test(mid[0])) {
+          disRank = mid[0];
+        }
+
+        let candidates = legalMoves.filter(m => sqStr(m.to) === dest);
+        if (promo) candidates = candidates.filter(m => (m.promo || null) === promo);
+        if (disFile) {
+          const fx = disFile.charCodeAt(0) - 97;
+          candidates = candidates.filter(m => m.from.x === fx);
+        }
+        if (disRank) {
+          const fy = 8 - (disRank.charCodeAt(0) - 48);
+          candidates = candidates.filter(m => m.from.y === fy);
+        }
+        if (pieceLetter) {
+          candidates = candidates.filter(m => {
+            const pc = board?.[m.from.y]?.[m.from.x] || null;
+            return pc && String(pc.type || '').toUpperCase() === pieceLetter;
+          });
+        }
+        if (candidates.length === 1) return candidates[0];
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  if (stripped.length < 4) return null;
+
+  const from = token.slice(0, 2);
+  const to = token.slice(2, 4);
+  const promo = stripped.length >= 5 ? stripped[4].toUpperCase() : null;
+
+  let mv = legalMoves.find(m => {
+    const f = sqStr(m.from);
+    const t = sqStr(m.to);
+    if ((f + t) !== (from + to)) return false;
+    if (promo) return (m.promo || null) === promo;
+    return true;
+  }) || null;
+  if (mv) return mv;
+
+  const hintSq = __openingParseSq(from);
+  let hintType = null;
+  try {
+    if (hintSq) {
+      const pc = board?.[hintSq.y]?.[hintSq.x] || null;
+      if (pc && pc.color === turnColor && pc.type) hintType = pc.type;
+    }
+  } catch (e) { /* ignore */ }
+
+  let candidates = legalMoves.filter(m => {
+    if (sqStr(m.to) !== to) return false;
+    if (promo && (m.promo || null) !== promo) return false;
+    return true;
+  });
+  if (hintType) {
+    candidates = candidates.filter(m => {
+      const pc = board?.[m.from.y]?.[m.from.x] || null;
+      return pc && pc.type === hintType;
+    });
+  }
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1 && hintSq) {
+    let best = null;
+    let bestD = Infinity;
+    for (const c of candidates) {
+      const dx = c.from.x - hintSq.x;
+      const dy = c.from.y - hintSq.y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best;
+  }
+  return candidates.length ? candidates[0] : null;
+}
+
+function ensureOpeningIndexes() {
+  if (__openingIndexBuilt) return;
+  __openingIndexBuilt = true;
+  __openingPosIndex = new Map();
+
+  __openingListSorted = Array.isArray(OPENINGS) ? OPENINGS.slice() : [];
+  __openingListSorted.sort((a, b) => {
+    const ea = String(a.eco || '');
+    const eb = String(b.eco || '');
+    if (ea !== eb) return ea.localeCompare(eb);
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+
+  const start = fenToBoard(STARTPOS_FEN);
+  for (const entry of __openingListSorted) {
+    const moves = Array.isArray(entry.moves) ? entry.moves : [];
+    if (!moves.length) continue;
+
+    let ctx = cloneCtx(start.board, start.castling, start.enPassant);
+    let turn = start.turn;
+    let plies = 0;
+    const maxPlies = Math.min(moves.length, OPENING_INDEX_MAX_PLIES);
+
+    for (let i = 0; i < maxPlies; i++) {
+      const legal = generateLegalMovesFor(ctx.board, ctx.castling, ctx.enPassant, turn);
+      const mv = __openingFindMoveByToken(moves[i], legal, ctx.board, turn);
+      if (!mv) break;
+      const next = simulateMove(mv, ctx.board, ctx.castling, ctx.enPassant);
+      ctx = { board: next.board, castling: next.castling, enPassant: next.enPassant };
+      turn = (turn === LIGHT) ? DARK : LIGHT;
+      plies++;
+
+      const key = __openingPositionKey(ctx.board, turn, ctx.castling, ctx.enPassant);
+      const existing = __openingPosIndex.get(key);
+      const cand = { eco: entry.eco || '', name: entry.name || '', moves: moves, plies };
+
+      if (!existing) __openingPosIndex.set(key, cand);
+      else if ((cand.plies || 0) > (existing.plies || 0)) __openingPosIndex.set(key, cand);
+      else if ((cand.plies || 0) === (existing.plies || 0)) {
+        const a = `${cand.eco} ${cand.name}`;
+        const b = `${existing.eco} ${existing.name}`;
+        if (a.localeCompare(b) < 0) __openingPosIndex.set(key, cand);
+      }
+    }
+  }
+}
+
+function getCurrentOpeningInfo() {
+  try {
+    ensureOpeningIndexes();
+    if (!__openingPosIndex) return null;
+    const key = __openingPositionKey(state.board, state.turn, state.castling, state.enPassant);
+    return __openingPosIndex.get(key) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function applyOpeningLine(openingEntry, opts) {
+  if (!openingEntry) return false;
+  const o = openingEntry;
+
+  try { if (typeof _abortSearchIfAny === 'function') _abortSearchIfAny(); } catch (e) { /* ignore */ }
+  try { if (state && state.thinking) state.thinking = false; } catch (e) { /* ignore */ }
+
+  const prevAiEnabled = state.aiEnabled;
+  const prevAiColor = state.aiColor;
+  const prevMenuActive = state.menuActive;
+  const prevAutoPlayActive = (typeof autoPlayActive !== 'undefined') ? autoPlayActive : false;
+  try {
+    state.aiEnabled = false;
+    state.menuActive = true;
+    if (typeof autoPlayActive !== 'undefined') {
+      autoPlayActive = false;
+      try { updateAutoPlayButton(); } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* ignore */ }
+
+  let applied = 0;
+  try {
+    if (typeof resetBoard !== 'function') return false;
+    resetBoard();
+    for (const token of (o.moves || [])) {
+      const legal = generateLegalMoves(state.turn);
+      const mv = __openingFindMoveByToken(token, legal, state.board, state.turn);
+      if (!mv) break;
+      const ok = makeMove(mv);
+      if (ok === false) break;
+      applied++;
+    }
+  } finally {
+    try {
+      state.aiEnabled = prevAiEnabled;
+      state.aiColor = prevAiColor;
+      state.menuActive = prevMenuActive;
+      if (typeof autoPlayActive !== 'undefined') {
+        autoPlayActive = prevAutoPlayActive;
+        try { updateAutoPlayButton(); } catch (e) { /* ignore */ }
+      }
+      state.thinking = false;
+    } catch (e) { /* ignore */ }
+  }
+
+  try { render(); } catch (e) { /* ignore */ }
+  try { updateHud(); } catch (e) { /* ignore */ }
+  try { opts?.afterApply?.(applied); } catch (e) { /* ignore */ }
+  return applied > 0;
+}
+
+
+
 function getOpeningName(moveHistory) {
-	// Convert move objects to UCI (e2e4, etc.)
-	const uciMoves = moveHistory.map(mv => {
-		if (!mv || !mv.from || !mv.to) return "";
-		return (
-			String.fromCharCode(97 + mv.from.x) + (8 - mv.from.y) +
-			String.fromCharCode(97 + mv.to.x) + (8 - mv.to.y)
-		);
-	});
-	let best = { name: "(Unrecognized Opening)", len: 0 };
-	for (const entry of OPENINGS) {
-		let match = true;
-		for (let i = 0; i < entry.moves.length; i++) {
-			if (uciMoves[i] !== entry.moves[i]) { match = false; break; }
-		}
-		if (match && entry.moves.length > best.len) {
-			best = { name: entry.name, len: entry.moves.length };
-		}
-	}
-	return best.len > 0 ? best.name : "(Unrecognized Opening)";
+  const current = getCurrentOpeningInfo();
+  if (current && current.name) return (current.eco ? `${current.eco} — ` : '') + current.name;
+
+  // Fallback: prefix match by move list.
+  const uciMoves = (moveHistory || []).map(mv => {
+    if (!mv || !mv.from || !mv.to) return "";
+    return (
+      String.fromCharCode(97 + mv.from.x) + (8 - mv.from.y) +
+      String.fromCharCode(97 + mv.to.x) + (8 - mv.to.y)
+    );
+  });
+  let best = { name: "(Unrecognized Opening)", len: 0, eco: "" };
+  for (const entry of OPENINGS) {
+    let match = true;
+    for (let i = 0; i < entry.moves.length; i++) {
+      if (uciMoves[i] !== entry.moves[i]) { match = false; break; }
+    }
+    if (match && entry.moves.length > best.len) best = { name: entry.name, len: entry.moves.length, eco: entry.eco || "" };
+  }
+  if (best.len > 0) return (best.eco ? `${best.eco} — ` : '') + best.name;
+  return "(Unrecognized Opening)";
 }
 
 // ============================================================================
@@ -7419,7 +7991,11 @@ function renderMoveList() {
 	items.forEach(item => {
 		item.addEventListener('click', () => {
 			const index = parseInt(item.dataset.index, 10);
-			goToMove(index);
+      try { if (typeof _abortSearchIfAny === 'function') _abortSearchIfAny(); } catch (e) { /* ignore */ }
+      try { if (state && state.thinking) state.thinking = false; } catch (e) { /* ignore */ }
+      // Use window.goToMove if present so any wrappers apply.
+      if (typeof window.goToMove === 'function') window.goToMove(index);
+      else if (typeof goToMove === 'function') goToMove(index);
 		});
 	});
 
@@ -7467,8 +8043,10 @@ function renderMoveList() {
 	copyFenBtn.style.borderRadius = '4px';
 	copyFenBtn.onclick = () => {
 		const fen = boardToFEN();
-		navigator.clipboard.writeText(fen);
-		alert('FEN copied!');
+    copyTextToClipboard(fen).then((ok) => {
+      if (ok) alert('FEN copied!');
+      else prompt('Copy FEN:', fen);
+    });
 	};
 	btnRow.appendChild(copyFenBtn);
 
@@ -7519,11 +8097,150 @@ function renderMoveList() {
 	copyPgnBtn.onclick = () => {
 		if (typeof generatePGN === 'function') {
 			const pgn = generatePGN();
-			navigator.clipboard.writeText(pgn);
-			alert('PGN copied!');
+      copyTextToClipboard(pgn).then((ok) => {
+        if (ok) alert('PGN copied!');
+        else prompt('Copy PGN:', pgn);
+      });
 		}
 	};
 	btnRow.appendChild(copyPgnBtn);
+
+  // Opening Explorer button
+  const openExplorerBtn = document.createElement('button');
+  openExplorerBtn.id = 'btn-openings-explorer';
+  openExplorerBtn.textContent = 'Openings';
+  openExplorerBtn.style.padding = '4px 8px';
+  openExplorerBtn.style.fontSize = '12px';
+  openExplorerBtn.style.cursor = 'pointer';
+  openExplorerBtn.style.borderRadius = '4px';
+  btnRow.appendChild(openExplorerBtn);
+
+  // Opening Explorer panel (rendered under the buttons)
+  let explorer = document.getElementById('openings-explorer');
+  if (explorer && explorer.parentNode === moveList) moveList.removeChild(explorer);
+	
+  explorer = document.createElement('div');
+  explorer.id = 'openings-explorer';
+  explorer.style.display = 'none';
+  explorer.style.marginTop = '8px';
+  explorer.style.padding = '8px';
+  explorer.style.border = '1px solid #333';
+  explorer.style.borderRadius = '8px';
+  explorer.style.background = 'rgba(0,0,0,0.12)';
+
+  const explorerHeader = document.createElement('div');
+  explorerHeader.style.display = 'flex';
+  explorerHeader.style.gap = '6px';
+  explorerHeader.style.alignItems = 'center';
+
+  const explorerFilter = document.createElement('input');
+  explorerFilter.id = 'openings-explorer-filter';
+  explorerFilter.type = 'text';
+  explorerFilter.placeholder = 'Filter openings (e.g. B90, Najdorf)';
+  explorerFilter.style.flex = '1';
+  explorerFilter.style.fontSize = '12px';
+  explorerFilter.style.padding = '4px 8px';
+  explorerFilter.style.borderRadius = '6px';
+
+  const explorerGroup = document.createElement('select');
+  explorerGroup.id = 'openings-explorer-group';
+  explorerGroup.style.fontSize = '12px';
+  explorerGroup.style.padding = '4px 6px';
+  explorerGroup.style.borderRadius = '6px';
+  for (const v of ['All', 'A', 'B', 'C', 'D', 'E', 'F']) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    explorerGroup.appendChild(opt);
+  }
+
+  const explorerClose = document.createElement('button');
+  explorerClose.textContent = 'Close';
+  explorerClose.style.fontSize = '12px';
+  explorerClose.style.padding = '4px 8px';
+  explorerClose.style.borderRadius = '6px';
+  explorerClose.style.cursor = 'pointer';
+
+  explorerHeader.appendChild(explorerFilter);
+  explorerHeader.appendChild(explorerGroup);
+  explorerHeader.appendChild(explorerClose);
+
+  const explorerMeta = document.createElement('div');
+  explorerMeta.id = 'openings-explorer-meta';
+  explorerMeta.style.marginTop = '6px';
+  explorerMeta.style.fontSize = '11px';
+  explorerMeta.style.color = 'var(--muted)';
+
+  const explorerResults = document.createElement('div');
+  explorerResults.id = 'openings-explorer-results';
+  explorerResults.style.marginTop = '8px';
+  // Avoid nested scrolling issues on mobile; render a capped list.
+  explorerResults.style.maxHeight = 'none';
+  explorerResults.style.overflow = 'visible';
+
+  explorer.appendChild(explorerHeader);
+  explorer.appendChild(explorerMeta);
+  explorer.appendChild(explorerResults);
+
+  function renderExplorerResults() {
+    ensureOpeningIndexes();
+    const q = (explorerFilter.value || '').trim().toLowerCase();
+    const group = explorerGroup.value || 'All';
+    const list = __openingListSorted || [];
+    let filtered = list;
+    if (group !== 'All') {
+      filtered = filtered.filter(o => String(o.eco || '').startsWith(group));
+    }
+    if (q) {
+      filtered = filtered.filter(o => {
+        const eco = String(o.eco || '').toLowerCase();
+        const name = String(o.name || '').toLowerCase();
+        if (eco.includes(q) || name.includes(q)) return true;
+        try { if ((o.moves || []).join(' ').toLowerCase().includes(q)) return true; } catch (e) { /* ignore */ }
+        return false;
+      });
+    }
+    const cap = 250;
+    const shown = filtered.slice(0, cap);
+    explorerMeta.textContent = `Showing ${shown.length} of ${filtered.length} openings`;
+    explorerResults.innerHTML = '';
+    for (const o of shown) {
+      const item = document.createElement('div');
+      item.className = 'pgn-search-item';
+      item.style.padding = '6px 8px';
+      item.style.borderRadius = '6px';
+      item.style.cursor = 'pointer';
+      item.style.color = 'var(--accent)';
+      item.style.marginBottom = '4px';
+      item.textContent = `${o.eco || ''} — ${o.name || ''}`;
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      const onPick = (ev) => {
+        try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch (e) { /* ignore */ }
+        applyOpeningLine(o, {
+          afterApply: () => {
+            explorer.style.display = 'none';
+          }
+        });
+      };
+      item.addEventListener('pointerdown', onPick);
+      item.addEventListener('click', onPick);
+      item.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') onPick(e); });
+      explorerResults.appendChild(item);
+    }
+  }
+
+  openExplorerBtn.onclick = () => {
+    const isOpen = explorer.style.display !== 'none';
+    explorer.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) {
+      renderExplorerResults();
+      setTimeout(() => { try { explorerFilter.focus(); } catch (e) { /* ignore */ } }, 0);
+    }
+  };
+  explorerClose.onclick = () => { explorer.style.display = 'none'; };
+  explorerFilter.addEventListener('input', renderExplorerResults);
+  explorerGroup.addEventListener('change', renderExplorerResults);
 
 	// Add PGN search box below the buttons row
 	const searchBox = document.createElement('input');
@@ -7544,10 +8261,13 @@ function renderMoveList() {
     // Show search results list and let user click to load specific game
     const resultsDiv = document.createElement('div');
     resultsDiv.id = 'pgnSearchResults';
-    resultsDiv.style.maxHeight = '220px';
-    resultsDiv.style.overflow = 'auto';
+    // Avoid nested scrolling: the parent panel/drawer is already scrollable.
+    // Nested `overflow:auto` containers on mobile often swallow taps as scroll gestures.
+    resultsDiv.style.maxHeight = 'none';
+    resultsDiv.style.overflow = 'visible';
     resultsDiv.style.margin = '6px 0 12px 0';
     resultsDiv.style.display = 'none';
+    resultsDiv.style.touchAction = 'manipulation';
 
     function buildLabelUI(g, i) {
         const t = g.tags || {};
@@ -7559,6 +8279,14 @@ searchBox.addEventListener('input', function() {
     const val = this.value.trim().toLowerCase();
     resultsDiv.innerHTML = '';
     if (!val || val.length < 2) { resultsDiv.style.display = 'none'; return; }
+
+  const appendResultsMessage = (text) => {
+    const msg = document.createElement('div');
+    msg.style.padding = '6px';
+    msg.style.color = 'var(--muted)';
+    msg.textContent = text;
+    resultsDiv.appendChild(msg);
+  };
 
     // --- Opening search: match name, eco, or moves ---
     const openingMatches = OPENINGS.filter(o => {
@@ -7581,23 +8309,38 @@ searchBox.addEventListener('input', function() {
             item.style.cursor = 'pointer';
             item.style.color = 'var(--accent)';
             item.style.marginBottom = '4px';
+      item.style.pointerEvents = 'auto';
+      item.style.position = 'relative';
+      item.style.zIndex = '25';
             item.textContent = `[Opening] ${o.eco} — ${o.name}`;
-            item.addEventListener('click', () => {
-                resetBoard();
-                for (const move of o.moves) {
-                    const legal = generateLegalMoves(state.turn);
-                    const mv = legal.find(m => {
-                        const from = String.fromCharCode(97 + m.from.x) + (8 - m.from.y);
-                        const to = String.fromCharCode(97 + m.to.x) + (8 - m.to.y);
-                        return (from + to) === move;
-                    });
-                    if (mv) makeMove(mv);
-                }
-                render();
-                updateHud();
-                resultsDiv.style.display = 'none';
-                searchBox.value = '';
-            });
+        item.tabIndex = 0;
+        item.setAttribute('role', 'button');
+
+        const applyOpening = (ev) => {
+        try {
+          if (ev) {
+            // On mobile, taps can blur the input / close overlays before `click` fires.
+            ev.preventDefault?.();
+            ev.stopPropagation?.();
+          }
+        } catch (e) { /* ignore */ }
+
+			applyOpeningLine(o, {
+				afterApply: () => {
+					resultsDiv.style.display = 'none';
+					searchBox.value = '';
+				}
+			});
+          };
+
+    			// Prefer early events for touch devices.
+    			item.addEventListener('pointerdown', applyOpening);
+    			item.addEventListener('touchstart', applyOpening, { passive: false });
+    			item.addEventListener('mousedown', applyOpening);
+    			item.addEventListener('click', applyOpening);
+    			item.addEventListener('keydown', (e) => {
+    				if (e.key === 'Enter' || e.key === ' ') applyOpening(e);
+    			});
             resultsDiv.appendChild(item);
         }
         // Divider if there are also PGN matches
@@ -7610,12 +8353,12 @@ searchBox.addEventListener('input', function() {
 
     // --- Existing PGN search code ---
     if (!pgnGames || pgnGames.length === 0) {
-        resultsDiv.innerHTML += '<div style="padding:6px;color:var(--muted)">No PGN games loaded. Click "Load PGN" to import games.</div>';
+      appendResultsMessage('No PGN games loaded. Click "Load PGN" to import games.');
         resultsDiv.style.display = 'block';
         return;
     }
     const results = typeof window.searchPGNGames === 'function' ? window.searchPGNGames(val) : window.getPGNGames().filter(g => ((Object.values(g.tags||{}).join(' ') + ' ' + (g.moves||[]).join(' ')).toLowerCase().includes(val)));
-    if (!results || results.length === 0) { resultsDiv.innerHTML += '<div style="padding:6px;color:var(--muted)">No matches</div>'; resultsDiv.style.display = 'block'; return; }
+    if (!results || results.length === 0) { appendResultsMessage('No matches'); resultsDiv.style.display = 'block'; return; }
     for (let r = 0; r < Math.min(results.length, 20); r++) {
         const g = results[r];
         const idx = pgnGames.indexOf(g);
@@ -7651,6 +8394,7 @@ searchBox.addEventListener('input', function() {
     btnRow.className = 'fen-pgn-btn-row';
 
     moveList.appendChild(btnRow);
+    moveList.appendChild(explorer);
     moveList.appendChild(searchBox);
     moveList.appendChild(resultsDiv);
     // Scroll to bottom
@@ -7756,6 +8500,10 @@ updateHud = function() {
 	} else {
 		lastMoveText.textContent = "Last: --";
 	}
+  try {
+    const oi = getCurrentOpeningInfo();
+    if (openingText) openingText.textContent = oi ? `Opening: ${oi.eco ? oi.eco + ' — ' : ''}${oi.name}` : 'Opening: --';
+  } catch (e) { /* ignore */ }
 	renderMoveList();
 };
 
@@ -7998,18 +8746,58 @@ attachUIButtons();
 		if (state.gameOver) return;
 		if (state.turn !== state.aiColor) return;
 		if (state.thinking) return;
-		state.thinking = true;
-		const { thinkTimeMs } = getDifficultySettings(state.aiLevel);
-		setTimeout(() => {
-			const mv = aiChooseMove();
-			if (mv) {
-				makeMove(mv);
-				syncTrainingNotes();
-			} else {
-				syncTrainingNotes();
-			}
-			state.thinking = false;
-		}, thinkTimeMs);
+    // Prevent stale AI callbacks from making moves after navigation/undo/goToMove.
+    if (typeof window.__aiThinkToken !== 'number') window.__aiThinkToken = 0;
+    if (typeof window.__aiThinkTimer === 'undefined') window.__aiThinkTimer = null;
+    const myToken = ++window.__aiThinkToken;
+    const turnAtSchedule = state.turn;
+    const aiColorAtSchedule = state.aiColor;
+    state.thinking = true;
+    const { thinkTimeMs } = getDifficultySettings(state.aiLevel);
+    if (window.__aiThinkTimer) clearTimeout(window.__aiThinkTimer);
+    window.__aiThinkTimer = setTimeout(() => {
+      // Drop if superseded or context changed.
+      if (myToken !== window.__aiThinkToken) { state.thinking = false; return; }
+      if (!state.aiEnabled || state.menuActive || state.gameOver) { state.thinking = false; return; }
+      if (state.turn !== turnAtSchedule || state.aiColor !== aiColorAtSchedule) { state.thinking = false; return; }
+      const w = ensureAIWorker();
+      if (!w) {
+        // Fallback: keep old behavior if worker can't start.
+        // Note: this will block the UI thread.
+        const mv = aiChooseMove();
+        if (mv) makeMove(mv);
+        try { syncTrainingNotes(); } catch (e) { /* ignore */ }
+        state.thinking = false;
+        return;
+      }
+      // Post a search request; the worker will reply asynchronously.
+      const snapshot = snapshotForAIWorker();
+      const settings = getDifficultySettings(state.aiLevel);
+      postAIWorkerRequest({
+        type: 'search',
+        token: myToken,
+        snapshot,
+        settings,
+        aiColor: state.aiColor,
+        aiLevel: state.aiLevel
+      }, {
+        onResult: (msg) => {
+          if (myToken !== window.__aiThinkToken) { state.thinking = false; return; }
+          if (!state.aiEnabled || state.menuActive || state.gameOver) { state.thinking = false; return; }
+          if (state.turn !== turnAtSchedule || state.aiColor !== aiColorAtSchedule) { state.thinking = false; return; }
+          if (msg && Number.isFinite(msg.nodes)) {
+            updateEngineInfo({ depth: settings.searchDepth, nodes: msg.nodes, evalScore: undefined });
+            if (typeof updateEngineInfo.flush === 'function') updateEngineInfo.flush();
+            setTimeout(() => { try { clearEngineInfo(); } catch (e) { /* ignore */ } }, 800);
+          }
+          const mv = msg.move;
+          if (mv) makeMove(mv);
+          try { syncTrainingNotes(); } catch (e) { /* ignore */ }
+          state.thinking = false;
+        },
+        onError: () => { state.thinking = false; }
+      });
+    }, thinkTimeMs);
 	}
 
 	function renderHistory() {
@@ -8627,10 +9415,10 @@ function formatScore(score) {
 		return `#-${movesToMate}`;
 	}
 
-	// Regular centipawn score (score is in pawns, convert to +/- format)
-	const centipawns = Math.round(score * 100);
-	const sign = centipawns >= 0 ? "+" : "";
-	return `${sign}${(centipawns / 100).toFixed(2)}`;
+  // Regular centipawn score (score is in pawns, convert to +/- format)
+  const centipawns = Math.round(score * 100);
+  const sign = centipawns >= 0 ? "+" : "";
+  return `${sign}${(centipawns / 100).toFixed(2)}`;
 }
 
 
@@ -8842,129 +9630,60 @@ function setMultiPVLines(lines) {
 // Integration: Update AI Move Selection
 // ============================================================================
 
-// Store original aiChooseMove
-const originalAiChooseMove = aiChooseMove;
+// NOTE: Do not override aiChooseMove here.
+// When hosted over HTTP/HTTPS, AI move selection runs in the Web Worker (see maybeRunAI/autoplay).
 
-// Override aiChooseMove to support Multi-PV
-aiChooseMove = function() {
-  clearEngineInfo();
-  const legal = generateLegalMoves(state.aiColor);
-  if (!legal.length) return null;
+function requestFixedDepthHintFromWorker(depth, color, onDone) {
+	const d = Math.max(1, depth | 0);
+	if (ensureAIWorker()) {
+    if (typeof window.__aiAnalysisToken !== 'number') window.__aiAnalysisToken = 0;
+		const snapshot = snapshotForAIWorker();
+		const settings = getDifficultySettings(state.aiLevel);
+		postAIWorkerRequest({
+			type: 'fixedDepth',
+      token: ++window.__aiAnalysisToken,
+			snapshot,
+			settings,
+			aiColor: state.aiColor,
+			aiLevel: state.aiLevel,
+			depth: d,
+			povColor: color,
+			turnColor: color
+		}, {
+			onResult: onDone,
+			onError: () => onDone && onDone({ type: 'error' })
+		});
+		return true;
+	}
+	return false;
+}
 
-  const settings = getDifficultySettings(state.aiLevel);
-  currentDifficulty = settings;
-  CONTEMPT = settings.contempt !== undefined ? settings.contempt : 20;
-
-  if (settings.moveNoise && Math.random() < settings.moveNoise) {
-    return legal[Math.floor(Math.random() * legal.length)];
-  }
-
-  const book = pickBookMove(legal, settings.openingBookStrength);
-  if (book) return book;
-
-  seePruneMain = 0;
-  seePruneQ = 0;
-  searchAge += 1;
-
-  const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
-  const ctx = cloneCtx(state.board, state.castling, state.enPassant);
-  const requestedDepth = settings.searchDepth;
-  const maxDepth = isMobileNav ? Math.min(requestedDepth, 10) : requestedDepth;
-  const requestedLines = multiPVConfig.lines;
-  const effectiveLines = isMobileNav ? Math.min(requestedLines, 2) : requestedLines;
-  const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
-
-  // Use Multi-PV search if enabled
-  if (multiPVConfig.enabled && effectiveLines > 1) {
-    const pvResults = searchMultiPV(
-      ctx,
-      maxDepth,
-      state.aiColor,
-      state.aiColor,
-      deadline,
-      effectiveLines
-    );
-
-    multiPVConfig.currentResults = pvResults;
-    renderMultiPVLines(pvResults);
-
-    let choice = pvResults[0]?.move || legal[Math.floor(Math.random() * legal.length)];
-    const bestEval = pvResults[0]?.score ?? 0;
-    const nodes = pvResults.reduce((sum, pv) => sum + (pv.nodes || 0), 0);
-    updateEngineInfo({ depth: maxDepth, nodes, evalScore: bestEval });
-    if (typeof updateEngineInfo.flush === 'function') updateEngineInfo.flush();
-
-    if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
-      const others = legal.filter(mv => mv !== choice);
-      if (others.length) choice = others[Math.floor(Math.random() * others.length)];
-    }
-
-    setTimeout(() => clearEngineInfo(), 800);
-    return choice;
-  }
-
-  // Single-PV (scores are in pawns)
-  let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
-  let prevScore = 0;
-  let totalNodes = 0;
-  let bestEval = 0;
-  const searchFn = (typeof window.searchBestMoveWithInfo === 'function') ? window.searchBestMoveWithInfo : searchBestMove;
-
-  for (let d = 1; d <= maxDepth; d++) {
-    if (Date.now() > deadline) break;
-
-    let alpha = -Infinity;
-    let beta = Infinity;
-    let aspWindow = 0.50;
-    if (d > 1 && Number.isFinite(prevScore)) {
-      alpha = prevScore - aspWindow;
-      beta = prevScore + aspWindow;
-    }
-
-    let res = null;
-    let attempts = 0;
-    while (attempts < 4) {
-      res = searchFn(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
-      if (!res || res.cut || Date.now() > deadline) break;
-      if (Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
-        attempts++;
-        aspWindow = Math.min(aspWindow * 2, 32);
-        alpha = prevScore - aspWindow;
-        beta = prevScore + aspWindow;
-        continue;
-      }
-      break;
-    }
-
-    if (res && !res.cut && Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
-      res = searchFn(ctx, d, -Infinity, Infinity, state.aiColor, state.aiColor, deadline, 0);
-    }
-
-    if (Number.isFinite(engineInfo.nodes)) totalNodes += engineInfo.nodes;
-    if (res && res.move) {
-      best = res;
-      prevScore = res.score;
-      bestEval = res.score;
-    }
-    updateEngineInfo({ depth: d, nodes: totalNodes, evalScore: bestEval });
-    if (!res || res.cut || Date.now() > deadline) break;
-  }
-
-  // Clear Multi-PV display in single-PV mode
-  multiPVConfig.currentResults = [];
-  renderMultiPVLines([]);
-
-  let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
-  if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
-    const others = legal.filter(mv => mv !== choice);
-    if (others.length) choice = others[Math.floor(Math.random() * others.length)];
-  }
-
-  updateEngineInfo({ depth: maxDepth, nodes: totalNodes, evalScore: bestEval });
-  if (typeof updateEngineInfo.flush === 'function') updateEngineInfo.flush();
-  setTimeout(() => clearEngineInfo(), 800);
-  return choice;
-};
+function requestMultiPVFromWorker(depth, lines, color, onDone) {
+	const d = Math.max(1, depth | 0);
+	const l = Math.max(1, lines | 0);
+	if (ensureAIWorker()) {
+    if (typeof window.__aiAnalysisToken !== 'number') window.__aiAnalysisToken = 0;
+		const snapshot = snapshotForAIWorker();
+		const settings = getDifficultySettings(state.aiLevel);
+		postAIWorkerRequest({
+			type: 'multiPV',
+      token: ++window.__aiAnalysisToken,
+			snapshot,
+			settings,
+			aiColor: state.aiColor,
+			aiLevel: state.aiLevel,
+			depth: d,
+			lines: l,
+			povColor: color,
+			turnColor: color
+		}, {
+			onResult: onDone,
+			onError: () => onDone && onDone({ type: 'error' })
+		});
+		return true;
+	}
+	return false;
+}
 
 // ============================================================================
 // Hint System Integration with Multi-PV
@@ -8988,49 +9707,84 @@ requestHint = function(depth) {
   const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
   const effectiveLines = isMobileNav ? Math.min(multiPVConfig.lines, 2) : multiPVConfig.lines;
   const effectiveDepth = isMobileNav ? Math.min(depth, 10) : depth;
-  if (multiPVConfig.enabled && effectiveLines > 1) {
-		const pvResults = searchMultiPV(
-			ctxSnap,
-      effectiveDepth,
-			turnColor,
-			turnColor,
-			Infinity,
-      effectiveLines
-		);
 
-		multiPVConfig.currentResults = pvResults;
-		renderMultiPVLines(pvResults);
-
-		// Highlight best move
-		const bestMove = pvResults[0]?.move;
-		if (bestMove) {
-			hintMove = bestMove;
-			hintVisible = true;
-
-			const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
-			const sim = simulateMove(bestMove, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
-			const evalAfter = evaluateBoard(sim.board, turnColor);
-			const note = explainMove(bestMove, evalBefore, evalAfter);
-			updateTrainingNotes(note);
-		}
-	} else {
-		// Single-PV hint (original behavior)
-		const mv = depth === 2 ? computeHint2(ctxSnap, turnColor) : computeHint4(ctxSnap, turnColor);
-		hintMove = mv;
-		hintVisible = !!mv;
-
-		if (mv) {
-			const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
-			const sim = simulateMove(mv, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
-			const evalAfter = evaluateBoard(sim.board, turnColor);
-			const note = explainMove(mv, evalBefore, evalAfter);
-			updateTrainingNotes(note);
-		}
-	}
-
-	hintBusy = false;
+	hintBusy = true;
 	hintTimer = null;
 	render();
+
+  if (multiPVConfig.enabled && effectiveLines > 1) {
+    const started = requestMultiPVFromWorker(effectiveDepth, effectiveLines, turnColor, (msg) => {
+      const pvResults = (msg && msg.kind === 'multiPV' && Array.isArray(msg.results))
+        ? msg.results.map(r => Object.assign({}, r, { timeMs: msg.timeMs }))
+        : [];
+      multiPVConfig.currentResults = pvResults;
+      renderMultiPVLines(pvResults);
+
+      const bestMove = pvResults[0]?.move;
+      if (bestMove) {
+        hintMove = bestMove;
+        hintVisible = true;
+        const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+        const sim = simulateMove(bestMove, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+        const evalAfter = evaluateBoard(sim.board, turnColor);
+        const note = explainMove(bestMove, evalBefore, evalAfter);
+        updateTrainingNotes(note);
+      }
+      hintBusy = false;
+      render();
+    });
+
+    if (!started) {
+      // Fallback (file://)
+      const pvResultsSync = searchMultiPV(ctxSnap, effectiveDepth, turnColor, turnColor, Infinity, effectiveLines);
+      multiPVConfig.currentResults = pvResultsSync;
+      renderMultiPVLines(pvResultsSync);
+      const bestMove = pvResultsSync && pvResultsSync[0] && pvResultsSync[0].move;
+      if (bestMove) {
+        hintMove = bestMove;
+        hintVisible = true;
+        const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+        const sim = simulateMove(bestMove, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+        const evalAfter = evaluateBoard(sim.board, turnColor);
+        const note = explainMove(bestMove, evalBefore, evalAfter);
+        updateTrainingNotes(note);
+      }
+      hintBusy = false;
+      render();
+    }
+    return;
+  }
+
+  const started = requestFixedDepthHintFromWorker(effectiveDepth, turnColor, (msg) => {
+    const mv = (msg && msg.kind === 'fixedDepth') ? msg.move : null;
+    hintMove = mv;
+    hintVisible = !!mv;
+    if (mv) {
+      const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+      const sim = simulateMove(mv, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+      const evalAfter = evaluateBoard(sim.board, turnColor);
+      const note = explainMove(mv, evalBefore, evalAfter);
+      updateTrainingNotes(note);
+    }
+    hintBusy = false;
+    render();
+  });
+
+  if (!started) {
+    // Fallback (file://): keep old behavior.
+    const mv = depth === 2 ? computeHint2(ctxSnap, turnColor) : computeHint4(ctxSnap, turnColor);
+    hintMove = mv;
+    hintVisible = !!mv;
+    if (mv) {
+      const evalBefore = evaluateBoard(ctxSnap.board, turnColor);
+      const sim = simulateMove(mv, ctxSnap.board, ctxSnap.castling, ctxSnap.enPassant);
+      const evalAfter = evaluateBoard(sim.board, turnColor);
+      const note = explainMove(mv, evalBefore, evalAfter);
+      updateTrainingNotes(note);
+    }
+    hintBusy = false;
+    render();
+  }
 };
 
 // ============================================================================

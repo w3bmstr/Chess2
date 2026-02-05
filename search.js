@@ -147,6 +147,9 @@ let searchAge = 0;
 // Global node counter (used by UI for Engine Info). Reset at root when needed.
 // Using `var` keeps it on `window` in non-module scripts.
 var SEARCH_NODES = 0;
+// Global abort flag: lets UI (and iterative deepening) stop thinking quickly.
+// Checked frequently in search/quiescence to keep interrupts responsive.
+var SEARCH_ABORT = false;
 const PAWN_TT_SIZE = 1 << 16;
 const PAWN_TT = Array(PAWN_TT_SIZE).fill(null);
 const EVAL_TT_SIZE = 1 << 16;
@@ -168,7 +171,28 @@ const historyHeur = [
     Array.from({ length: 64 }, () => Array(64).fill(0)),
     Array.from({ length: 64 }, () => Array(64).fill(0))
 ];
-let previousMove = null;
+
+// Periodic decay for ordering heuristics so stale patterns don't dominate.
+// Kept lightweight: 2 * 64 * 64 tables.
+const HEUR_DECAY_INTERVAL = 8; // searches
+const HEUR_DECAY_FACTOR = 0.90;
+function maybeDecayHeuristics() {
+	if (searchAge <= 0) return;
+	if (searchAge % HEUR_DECAY_INTERVAL !== 0) return;
+	const clearCounterMoves = (searchAge % (HEUR_DECAY_INTERVAL * 4) === 0);
+	for (let c = 0; c < 2; c++) {
+		for (let i = 0; i < 64; i++) {
+			const hRow = historyHeur[c][i];
+			const contRow = continuationHistory[c][i];
+			const cmRow = counterMoves[c][i];
+			for (let j = 0; j < 64; j++) {
+				hRow[j] = Math.trunc(hRow[j] * HEUR_DECAY_FACTOR);
+				contRow[j] = Math.trunc(contRow[j] * HEUR_DECAY_FACTOR);
+				if (clearCounterMoves) cmRow[j] = null;
+			}
+		}
+	}
+}
 
 // Pruning parameter table (pawn units). Low levels are more forgiving; high levels prune more for speed.
 const PRUNING_PARAMS = {
@@ -250,76 +274,46 @@ const PST = initPST();
 	}
 
 	function ttStore(hash, entry, ply = 0) {
-    const normScore = normalizeMateScore(entry.score, ply);
-    const newEntry = { ...entry, key: hash, score: normScore, age: searchAge };
+		const normScore = normalizeMateScore(entry.score, ply);
+		const newEntry = { ...entry, key: hash, score: normScore, age: searchAge };
 
-    let bucket = TT.get(hash);
-    if (bucket && !Array.isArray(bucket)) bucket = [bucket];
+		let bucket = TT.get(hash);
+		if (bucket && !Array.isArray(bucket)) bucket = [bucket];
 
-    // If no bucket, create one
-    if (!bucket) {
-        TT.set(hash, [newEntry]);
-        return;
-    }
+		if (!bucket) {
+			TT.set(hash, [newEntry]);
+			return;
+		}
 
-    // If bucket has space, just push
-    if (bucket.length < 2) {
-        bucket.push(newEntry);
-        TT.set(hash, bucket);
-        return;
-    }
+		if (bucket.length < 2) {
+			bucket.push(newEntry);
+			TT.set(hash, bucket);
+			return;
+		}
 
-    // Try to replace an entry with the same key
-    for (let i = 0; i < bucket.length; i++) {
-        const e = bucket[i];
-        if (e && e.key === hash) {
+		const isExact = (flag) => flag === "EXACT";
+		const entryScore = (e) => {
+			const depthScore = e?.depth || 0;
+			const ageScore = e?.age === searchAge ? 2 : 0;
+			const exactScore = isExact(e?.flag) ? 1 : 0;
+			return depthScore * 4 + ageScore + exactScore;
+		};
 
-            // Prefer deeper entries
-            if (newEntry.depth > (e.depth || 0)) {
-                bucket[i] = newEntry;
-                TT.set(hash, bucket);
-                return;
-            }
+		// Choose the weaker slot as victim.
+		const idx = entryScore(bucket[0]) <= entryScore(bucket[1]) ? 0 : 1;
+		const victim = bucket[idx];
+		const victimDepth = victim?.depth || 0;
+		const victimExact = isExact(victim?.flag);
 
-            // Prefer exact scores over bounds
-            if (newEntry.flag === EXACT && e.flag !== EXACT) {
-                bucket[i] = newEntry;
-                TT.set(hash, bucket);
-                return;
-            }
-
-            // Prefer newer entries
-            if (newEntry.age > (e.age || 0)) {
-                bucket[i] = newEntry;
-                TT.set(hash, bucket);
-                return;
-            }
-
-            // Otherwise keep the old entry
-            return;
-        }
-    }
-
-    // No matching key — choose a victim
-    const scoreEntry = (e) => {
-        const depthScore = e?.depth || 0;
-        const ageScore = e?.age === searchAge ? 1 : 0;
-        return depthScore * 4 + ageScore;
-    };
-
-    const idx = scoreEntry(bucket[0]) <= scoreEntry(bucket[1]) ? 0 : 1;
-    const victim = bucket[idx];
-
-    // Replacement rules for victim
-    if (
-        newEntry.depth > (victim?.depth || 0) ||          // deeper is better
-        (newEntry.flag === EXACT && victim.flag !== EXACT) || // exact beats bound
-        newEntry.age > (victim?.age || 0) ||              // newer is better
-        (victim.depth || 0) < 3                           // replace shallow junk
-    ) {
-        bucket[idx] = newEntry;
-        TT.set(hash, bucket);
-    }
+		if (
+			newEntry.depth + REPLACEMENT_MARGIN >= victimDepth ||
+			(isExact(newEntry.flag) && !victimExact) ||
+			newEntry.age > (victim?.age || 0) ||
+			victimDepth < 3
+		) {
+			bucket[idx] = newEntry;
+			TT.set(hash, bucket);
+		}
 }
 
 function moveToAlgebraic(mv) {
@@ -423,9 +417,30 @@ function moveToAlgebraic(mv) {
 		return null;
 	}
 
-	function quiescence(ctx, alpha, beta, povColor, turn, deadlineMs) {
+	function quiescence(ctx, alpha, beta, povColor, turn, deadlineMs, ply = 0) {
+		if (SEARCH_ABORT) return { score: 0, cut: true };
 		SEARCH_NODES++;
 		if (Date.now() > deadlineMs) return { score: evaluateBoard(ctx.board, povColor), cut: true };
+		// Mate-distance pruning clamp.
+		const MATE_SCORE = 10000;
+		const mateBound = MATE_SCORE - ply;
+		if (Number.isFinite(alpha) || alpha === -Infinity) alpha = Math.max(alpha, -mateBound);
+		if (Number.isFinite(beta) || beta === Infinity) beta = Math.min(beta, mateBound);
+		if (alpha >= beta) return { score: alpha };
+
+		// TT probe in quiescence (speed + stability).
+		try {
+			const hash = computeHash(ctx, turn);
+			const tt = ttProbe(hash, ply);
+			if (tt) {
+				if (tt.flag === "EXACT") return { score: tt.score };
+				if (tt.flag === "LOW" && tt.score > alpha) alpha = tt.score;
+				else if (tt.flag === "HIGH" && tt.score < beta) beta = tt.score;
+				if (alpha >= beta) return { score: tt.score };
+			}
+		} catch (e) {
+			// ignore
+		}
 		const enemy = turn === LIGHT ? DARK : LIGHT;
 		const inChk = inCheck(turn, ctx.board);
 		const standPat = inChk ? -Infinity : evaluateBoard(ctx.board, povColor);
@@ -441,17 +456,37 @@ function moveToAlgebraic(mv) {
 			if (standPat + deltaMargin < alpha) return { score: alpha };
 		}
 		const legal = generateLegalMovesFor(ctx.board, ctx.castling, ctx.enPassant, turn);
-		const noisy = (inChk ? legal : legal.filter(mv => mv.enPassant || ctx.board[mv.to.y][mv.to.x]))
-			.sort((a, b) => {
-				const tgtA = a.enPassant ? { type: "P" } : ctx.board[a.to.y][a.to.x];
-				const tgtB = b.enPassant ? { type: "P" } : ctx.board[b.to.y][b.to.x];
-				const va = tgtA ? (PIECE_VALUES[tgtA.type] || 0) : 0;
-				const vb = tgtB ? (PIECE_VALUES[tgtB.type] || 0) : 0;
-				return vb - va; // MVV-LVA style ordering for captures in qsearch
-			});
-		if (!noisy.length) return { score: standPat };
-		let bestScore = standPat;
+		if (!legal.length) {
+			// Terminal inside qsearch recursion.
+			if (inChk) {
+				const mateScore = (turn === povColor) ? (-MATE_SCORE + ply) : (MATE_SCORE - ply);
+				return { score: mateScore };
+			}
+			return { score: 0 };
+		}
+		// Conservative qsearch checks policy:
+		// - If in check: search all legal evasions (needed for correctness).
+		// - Otherwise: capture/promotions only (avoid node explosion).
+		const noisy = inChk
+			? orderMoves(legal, ctx.board, ply)
+			: legal
+				.filter(mv => mv.promo || mv.enPassant || ctx.board[mv.to.y][mv.to.x])
+				.sort((a, b) => {
+					const tgtA = a.enPassant ? { type: "P" } : ctx.board[a.to.y][a.to.x];
+					const tgtB = b.enPassant ? { type: "P" } : ctx.board[b.to.y][b.to.x];
+					const va = tgtA ? (PIECE_VALUES[tgtA.type] || 0) : 0;
+					const vb = tgtB ? (PIECE_VALUES[tgtB.type] || 0) : 0;
+					const pa = a.promo ? (PIECE_VALUES[a.promo] || 0) : 0;
+					const pb = b.promo ? (PIECE_VALUES[b.promo] || 0) : 0;
+					const sa = va + (pa ? (20 + pa) : 0);
+					const sb = vb + (pb ? (20 + pb) : 0);
+					return sb - sa; // promotions first, then MVV ordering
+				});
+		let bestScore = inChk
+			? (turn === povColor ? -Infinity : Infinity)
+			: standPat;
 		for (const mv of noisy) {
+			if (SEARCH_ABORT) return { score: 0, cut: true };
 			const nextSim = simulateMove(mv, ctx.board, ctx.castling, ctx.enPassant);
 			const nextCtx = { board: nextSim.board, castling: nextSim.castling, enPassant: nextSim.enPassant };
 			const givesCheck = inCheck(enemy, nextCtx.board);
@@ -477,7 +512,7 @@ function moveToAlgebraic(mv) {
 					continue;
 				}
 			}
-			const res = quiescence(nextCtx, alpha, beta, povColor, enemy, deadlineMs);
+			const res = quiescence(nextCtx, alpha, beta, povColor, enemy, deadlineMs, ply + 1);
 			const score = res.score;
 			if (turn === povColor) {
 				if (score > bestScore) bestScore = score;
@@ -513,22 +548,87 @@ function moveToAlgebraic(mv) {
 		return h;
 	}
 
-function staticEvalAfterMove(board, mv) {
-    const sim = simulateMove(mv, board, state?.castling, state?.enPassant);
-    return evaluateBoard(sim.board, state.aiColor);
-}
-
-
-	function orderMoves(moves, board, ply = 0, ttMove = null) {
+	function orderMoves(moves, board, ply = 0, ttMove = null, prevMove = null) {
 		// Enhanced move ordering: TT move > captures/promos > killer > history > quiets
+		// Cheap quiet tie-breakers: direct-check bonus + PST delta + castling bonus.
+		let sideColor = null;
+		for (let i = 0; i < moves.length; i++) {
+			const mv = moves[i];
+			const pc = board?.[mv?.from?.y]?.[mv?.from?.x];
+			if (pc && pc.color) { sideColor = pc.color; break; }
+		}
+		const enemyKing = sideColor ? findKingQuick(board, sideColor === LIGHT ? DARK : LIGHT) : null;
+		const PST_SCALE = 2000;
+		const CHECK_BONUS = 650_000;
+		const CAPTURE_CHECK_BONUS = 500_000;
+		const PROMO_CHECK_BONUS = 300_000;
+		const CASTLE_BONUS = 25_000;
+
+		function pstDelta(mover, from, to) {
+			if (!mover || !PST || !PST[mover.type]) return 0;
+			const table = mover.color === LIGHT ? PST[mover.type].w : PST[mover.type].b;
+			if (!table) return 0;
+			const fromIdx = from.y * 8 + from.x;
+			const toIdx = to.y * 8 + to.x;
+			return (table[toIdx] || 0) - (table[fromIdx] || 0);
+		}
+
+		function givesDirectCheck(board, mv, mover, enemyKing) {
+			if (!enemyKing || !mover) return false;
+			const toX = mv.to.x, toY = mv.to.y;
+			const kx = enemyKing.x, ky = enemyKing.y;
+			const dx = kx - toX;
+			const dy = ky - toY;
+
+			if (mover.type === "N") {
+				const adx = Math.abs(dx), ady = Math.abs(dy);
+				return (adx === 1 && ady === 2) || (adx === 2 && ady === 1);
+			}
+			if (mover.type === "P") {
+				const dir = mover.color === LIGHT ? -1 : 1;
+				return (ky === toY + dir) && (kx === toX - 1 || kx === toX + 1);
+			}
+			if (mover.type === "K") {
+				return Math.max(Math.abs(dx), Math.abs(dy)) === 1;
+			}
+
+			const clearRay = (stepX, stepY) => {
+				let x = toX + stepX;
+				let y = toY + stepY;
+				while (x !== kx || y !== ky) {
+					// Treat the mover's origin as empty after the move.
+					if (!(x === mv.from.x && y === mv.from.y)) {
+						if (board[y][x]) return false;
+					}
+					x += stepX;
+					y += stepY;
+				}
+				return true;
+			};
+
+			if (mover.type === "B" || mover.type === "Q") {
+				if (Math.abs(dx) === Math.abs(dy) && dx !== 0) {
+					return clearRay(Math.sign(dx), Math.sign(dy));
+				}
+			}
+			if (mover.type === "R" || mover.type === "Q") {
+				if (dx === 0 && dy !== 0) return clearRay(0, Math.sign(dy));
+				if (dy === 0 && dx !== 0) return clearRay(Math.sign(dx), 0);
+			}
+			return false;
+		}
+
 		return moves.slice().sort((a, b) => scoreMove(b) - scoreMove(a));
 
 		function scoreMove(mv) {
 			const mover = board[mv.from.y][mv.from.x];
+			if (!mover) return 0;
 			const tgt = mv.enPassant ? { type: "P" } : board[mv.to.y][mv.to.x];
 			const isCapture = !!tgt || mv.enPassant;
 			const isPromo = !!mv.promo;
 			const isQuiet = !isCapture && !isPromo;
+			const isCastle = mover.type === "K" && Math.abs(mv.to.x - mv.from.x) === 2;
+			const movedPieceForCheck = (isPromo && typeof mv.promo === "string") ? { ...mover, type: mv.promo } : mover;
 			const idxFrom = mv.from.y * 8 + mv.from.x;
 			const idxTo = mv.to.y * 8 + mv.to.x;
 			const colorIdx = mover.color === LIGHT ? 0 : 1;
@@ -537,16 +637,29 @@ function staticEvalAfterMove(board, mv) {
 			// Captures/promos next
 			if (isCapture) {
 				const tgtVal = tgt ? (PIECE_VALUES[tgt.type] || 0) : 0;
+				// For move ordering, don't treat king captures as inherently "bad" due to a large king value.
 				const moverVal = mover ? (PIECE_VALUES[mover.type] || 0) : 0;
-				const mvvLva = tgt ? (tgtVal * 120 - moverVal * 40) : 0;
-				return (mvvLva + see(board, mv) / 10) * 1000;
+				const lvaVal = (mover && mover.type === "K") ? 0 : moverVal;
+				const mvvLva = tgt ? (tgtVal * 120 - lvaVal * 40) : 0;
+				let score = (mvvLva + see(board, mv) / 10) * 1000;
+				// Capture-checks are highly forcing; boost them within the capture bucket.
+				if (enemyKing && givesDirectCheck(board, mv, movedPieceForCheck, enemyKing)) score += CAPTURE_CHECK_BONUS;
+				return score;
 			}
-			if (isPromo) return 900_000;
+			if (isPromo) {
+				let score = 900_000;
+				if (enemyKing && givesDirectCheck(board, mv, movedPieceForCheck, enemyKing)) score += PROMO_CHECK_BONUS;
+				return score;
+			}
+			// Quiet checks are very forcing; prioritize them above killers/history.
+			if (isQuiet && enemyKing && givesDirectCheck(board, mv, mover, enemyKing)) {
+				return CHECK_BONUS + (historyHeur[colorIdx][idxFrom][idxTo] || 0);
+			}
 			// Killer moves
 			const killerHit = isQuiet && killers[ply]?.some(k => k && k.from.x === mv.from.x && k.from.y === mv.from.y && k.to.x === mv.to.x && k.to.y === mv.to.y);
 			if (killerHit) return 500_000;
-			// Countermove heuristic
-const prev = previousMove; // we will define this in storeHeuristics
+			// Countermove heuristic (node-specific: refute previous ply move)
+const prev = prevMove;
 if (isQuiet && prev) {
     const pFrom = prev.from.y * 8 + prev.from.x;
     const pTo = prev.to.y * 8 + prev.to.x;
@@ -565,16 +678,15 @@ if (isQuiet && prev) {
     const pFrom = prev.from.y * 8 + prev.from.x;
     const pTo = prev.to.y * 8 + prev.to.x;
     const cont = continuationHistory[colorIdx][pFrom][pTo];
-    return historyHeur[colorIdx][idxFrom][idxTo] + cont;
+				const bonus = pstDelta(mover, mv.from, mv.to) * PST_SCALE + (isCastle ? CASTLE_BONUS : 0);
+    return historyHeur[colorIdx][idxFrom][idxTo] + cont + bonus;
 }
 
 			// History heuristic for quiets
-			if (isQuiet) return historyHeur[colorIdx][idxFrom][idxTo];
-			// Static eval quiet ordering
-if (isQuiet) {
-    const delta = staticEvalAfterMove(board, mv);
-    return historyHeur[colorIdx][idxFrom][idxTo] + delta;
-}
+			if (isQuiet) {
+				const bonus = pstDelta(mover, mv.from, mv.to) * PST_SCALE + (isCastle ? CASTLE_BONUS : 0);
+				return historyHeur[colorIdx][idxFrom][idxTo] + bonus;
+			}
 
 			// Default
 			return 0;
@@ -677,9 +789,156 @@ function attackersTo(board, x, y, color) {
 		return gain[0];
 	}
 
-	function searchBestMove(ctx, depth, alpha, beta, povColor, turn, deadlineMs, ply = 0) {
-		SEARCH_NODES++;
-		if (deadlineMs !== Infinity && Date.now() > deadlineMs) return { score: evaluateBoard(ctx.board, povColor), move: null, cut: true };
+	// =====================================================================
+	// Drawishness bias via repetition (soft heuristic)
+	//
+	// When clearly better: discourage repeating the same position.
+	// When clearly worse: allow/encourage repetition as a drawing resource.
+	//
+	// Uses the same position key definition as state.js's repetition tracker:
+	//   piece placement + active color + castling + en-passant.
+	// We combine game-history counts (state.repetition.counts) with an O(1)
+	// per-search-line counter to detect repetition inside the PV.
+	// =====================================================================
+
+	let REP_BASE_COUNTS = null; // read-only reference to state.repetition.counts
+	let REP_PATH_COUNTS = Object.create(null);
+	let REP_PATH_STACK = [];
+
+	function repetitionKeyFor(board, castling, enPassant, turn) {
+		let placement = "";
+		for (let y = 0; y < 8; y++) {
+			let empty = 0;
+			for (let x = 0; x < 8; x++) {
+				const pc = board[y][x];
+				if (!pc) {
+					empty++;
+					continue;
+				}
+				if (empty) {
+					placement += String(empty);
+					empty = 0;
+				}
+				const t = pc.type;
+				const letter = (typeof t === 'string' && t.length) ? t[0] : '?';
+				placement += (pc.color === LIGHT) ? letter : letter.toLowerCase();
+			}
+			if (empty) placement += String(empty);
+			if (y < 7) placement += "/";
+		}
+
+		const turnField = (turn === LIGHT) ? "w" : "b";
+
+		let castlingField = "";
+		try {
+			if (castling && castling[LIGHT]) {
+				if (castling[LIGHT].kingside) castlingField += "K";
+				if (castling[LIGHT].queenside) castlingField += "Q";
+			}
+			if (castling && castling[DARK]) {
+				if (castling[DARK].kingside) castlingField += "k";
+				if (castling[DARK].queenside) castlingField += "q";
+			}
+		} catch (e) {
+			castlingField = "";
+		}
+		if (!castlingField) castlingField = "-";
+
+		let epField = "-";
+		if (enPassant && Number.isInteger(enPassant.x) && Number.isInteger(enPassant.y)) {
+			const file = String.fromCharCode(97 + enPassant.x);
+			const rank = 8 - enPassant.y;
+			epField = file + String(rank);
+		}
+
+		return placement + " " + turnField + " " + castlingField + " " + epField;
+	}
+
+	function repInitForRoot() {
+		REP_BASE_COUNTS = null;
+		REP_PATH_COUNTS = Object.create(null);
+		REP_PATH_STACK = [];
+		try {
+			if (typeof state !== 'undefined' && state.repetition && state.repetition.counts) {
+				REP_BASE_COUNTS = state.repetition.counts;
+			}
+		} catch (e) {
+			REP_BASE_COUNTS = null;
+		}
+		// Root position is already included in REP_BASE_COUNTS via state.positionHistory,
+		// so we intentionally do NOT push it into REP_PATH_COUNTS (avoid double-counting).
+	}
+
+	function repPush(key) {
+		REP_PATH_STACK.push(key);
+		REP_PATH_COUNTS[key] = (REP_PATH_COUNTS[key] || 0) + 1;
+	}
+
+	function repPop() {
+		if (!REP_PATH_STACK.length) return;
+		const key = REP_PATH_STACK.pop();
+		const next = (REP_PATH_COUNTS[key] || 0) - 1;
+		if (next <= 0) delete REP_PATH_COUNTS[key];
+		else REP_PATH_COUNTS[key] = next;
+	}
+
+	function repExistingCount(key) {
+		return (REP_PATH_COUNTS[key] || 0) + (REP_BASE_COUNTS ? (REP_BASE_COUNTS[key] || 0) : 0);
+	}
+
+	function repetitionDrawishBias(staticEvalPawns, existingCount, depth) {
+		if (!existingCount) return 0;
+		const adv = staticEvalPawns;
+		const severity = existingCount >= 2 ? 2 : 1;
+		const WIN = 0.60;
+		const LOSE = -0.60;
+		const depthScale = Math.max(0.35, Math.min(1.0, depth / 6));
+		if (adv >= WIN) return (severity === 2 ? -0.45 : -0.20) * depthScale;
+		if (adv <= LOSE) return (severity === 2 ? +0.45 : +0.20) * depthScale;
+		return (severity === 2 ? -0.06 : -0.03) * depthScale;
+	}
+
+	function fiftyMoveNoProgressBias(staticEvalPawns, isNoProgress, depth) {
+		// Penalize drifting (no pawn move/capture) when winning; reward it when losing.
+		if (!isNoProgress) return 0;
+		const WIN = 0.60;
+		const LOSE = -0.60;
+		const adv = staticEvalPawns;
+		if (!(adv >= WIN || adv <= LOSE)) return 0;
+		let halfmove = 0;
+		try { halfmove = (typeof state !== 'undefined' && Number.isFinite(state.halfmove)) ? state.halfmove : 0; } catch (e) { halfmove = 0; }
+		// Stronger bias closer to the 50-move threshold.
+		const drift = Math.max(0, Math.min(1, halfmove / 100));
+		const depthScale = Math.max(0.35, Math.min(1.0, depth / 6));
+		const magnitude = (0.03 + 0.09 * drift) * depthScale; // pawns
+		return adv >= WIN ? -magnitude : +magnitude;
+	}
+
+	function searchBestMove(ctx, depth, alpha, beta, povColor, turn, deadlineMs, ply = 0, prevMove = null) {
+		if (ply === 0) repInitForRoot();
+		let repPushed = false;
+		try {
+			if (ply > 0) {
+				try {
+					const nodeKey = repetitionKeyFor(ctx.board, ctx.castling, ctx.enPassant, turn);
+					repPush(nodeKey);
+					repPushed = true;
+				} catch (e) {
+					repPushed = false;
+				}
+			}
+
+			if (SEARCH_ABORT) return { score: 0, move: null, cut: true };
+			SEARCH_NODES++;
+			if (deadlineMs !== Infinity && Date.now() > deadlineMs) return { score: evaluateBoard(ctx.board, povColor), move: null, cut: true };
+
+			// Mate-distance pruning: clamp bounds so mates are preferred by distance.
+			// Ensures we never search beyond the maximum possible mate score at this ply.
+			const MATE_SCORE = 10000;
+			const mateBound = MATE_SCORE - ply;
+			if (Number.isFinite(alpha) || alpha === -Infinity) alpha = Math.max(alpha, -mateBound);
+			if (Number.isFinite(beta) || beta === Infinity) beta = Math.min(beta, mateBound);
+			if (alpha >= beta) return { score: alpha, move: null };
 		const hash = computeHash(ctx, turn);
 		const usableTT = ttProbe(hash, ply);
 		const alphaOrig = alpha;
@@ -725,7 +984,7 @@ if (!inChk && (DrawDetection.isDrawByRepetition() || DrawDetection.isDrawByFifty
 		if (!inChk && depth === 1 && staticEval + EXT_FUT_MARGIN <= alpha) {
 			return { score: staticEval, move: null };
 		}
-		if (depth === 0) return quiescence(ctx, alpha, beta, povColor, turn, deadlineMs);
+		if (depth === 0) return quiescence(ctx, alpha, beta, povColor, turn, deadlineMs, ply);
 		if (!inChk) {
 			const margin = FUTILITY_MARGIN_PER_DEPTH * depth;
 			if (staticEval - margin >= beta) return { score: staticEval, move: null }; // reverse futility
@@ -736,7 +995,7 @@ if (!inChk && (DrawDetection.isDrawByRepetition() || DrawDetection.isDrawByFifty
 		if (depth >= 4 && !inChk && (!usableTT || !usableTT.move)) {
 			const iidDepth = depth - 2;
 			if (iidDepth > 0) {
-				const iidRes = searchBestMove(ctx, iidDepth, alpha, beta, povColor, turn, deadlineMs, ply);
+				const iidRes = searchBestMove(ctx, iidDepth, alpha, beta, povColor, turn, deadlineMs, ply, prevMove);
 				if (!iidRes.cut && iidRes.move) iidMove = iidRes.move;
 				const ttAfterIid = ttProbe(hash, ply);
 				if (ttAfterIid && ttAfterIid.move) iidMove = ttAfterIid.move;
@@ -749,15 +1008,16 @@ if (!inChk && (DrawDetection.isDrawByRepetition() || DrawDetection.isDrawByFifty
 			if (!isFortressOrUnsafe(ctx.board, turn)) {
 				const nullCtx = { board: ctx.board, castling: ctx.castling, enPassant: null };
 				const r = 2 + Math.floor(depth / 4);
-				const nullRes = searchBestMove(nullCtx, depth - 1 - r, -beta, -beta + 1, povColor, enemy, deadlineMs, ply + 1);
+				const nullRes = searchBestMove(nullCtx, depth - 1 - r, -beta, -beta + 1, povColor, enemy, deadlineMs, ply + 1, null);
 				if (!nullRes.cut && nullRes.score >= beta + NULL_MOVE_R_MARGIN) return { score: nullRes.score, move: null };
 			}
 		}
 
 		let bestMove = null;
 		let bestScore = turn === povColor ? -Infinity : Infinity;
-		const ordered = orderMoves(legal, ctx.board, ply, usableTT?.move || iidMove || null);
+		const ordered = orderMoves(legal, ctx.board, ply, usableTT?.move || iidMove || null, prevMove);
 		for (let i = 0; i < ordered.length; i++) {
+			if (SEARCH_ABORT) return { score: 0, move: null, cut: true };
 			const mv = ordered[i];
 			const nextSim = simulateMove(mv, ctx.board, ctx.castling, ctx.enPassant);
 			const nextCtx = { board: nextSim.board, castling: nextSim.castling, enPassant: nextSim.enPassant };
@@ -776,6 +1036,11 @@ if (allowCheckExt) {
 			const isCapture = mv.enPassant || ctx.board[mv.to.y][mv.to.x];
 			const isQuiet = !isCapture && !mv.promo && !givesCheck;
 			const isTTMove = usableTT && usableTT.move && usableTT.move.from.x === mv.from.x && usableTT.move.from.y === mv.from.y && usableTT.move.to.x === mv.to.x && usableTT.move.to.y === mv.to.y;
+			const idxFrom = mv.from.y * 8 + mv.from.x;
+			const idxTo = mv.to.y * 8 + mv.to.x;
+			const colorIdx = turn === LIGHT ? 0 : 1;
+			const histVal = (historyHeur[colorIdx] && historyHeur[colorIdx][idxFrom]) ? (historyHeur[colorIdx][idxFrom][idxTo] || 0) : 0;
+			const killerHit = isQuiet && killers[ply]?.some(k => k && k.from.x === mv.from.x && k.from.y === mv.from.y && k.to.x === mv.to.x && k.to.y === mv.to.y);
 
 			// Passed Pawn Extension: extend search for advancing passed pawns
 		if (depth >= 4 && moverPiece && moverPiece.type === "P" && !givesCheck) {
@@ -808,7 +1073,7 @@ if (allowCheckExt) {
 					if (alt === mv) continue;
 					const altSim = simulateMove(alt, ctx.board, ctx.castling, ctx.enPassant);
 					const altCtx = { board: altSim.board, castling: altSim.castling, enPassant: altSim.enPassant };
-					const altRes = searchBestMove(altCtx, Math.max(1, depth - 2), narrowAlpha, narrowBeta, povColor, enemy, deadlineMs, ply + 1);
+					const altRes = searchBestMove(altCtx, Math.max(1, depth - 2), narrowAlpha, narrowBeta, povColor, enemy, deadlineMs, ply + 1, alt);
 					if (altRes.cut || altRes.score >= narrowBeta) { singular = false; break; }
 				}
 				if (singular) newDepth = Math.min(depth, newDepth + 1);
@@ -834,7 +1099,8 @@ if (allowCheckExt) {
 			}
 
 			// SEE pruning: skip bad captures (keep checks/promos/TT move)
-			if (!isTTMove && isCapture && !mv.promo && !givesCheck) {
+			// IMPORTANT: never prune captures when in check; all evasions must be searched.
+			if (!inChk && !isTTMove && isCapture && !mv.promo && !givesCheck) {
 				const seeScore = see(ctx.board, mv);
 				if (!Number.isFinite(seeScore) || seeScore < -30) {
 					seePruneMain++;
@@ -852,32 +1118,63 @@ if (isQuiet) {
 	else if (lmrSafety < 0.9) lmrSafety = 1.3; // risky/aggressive
 	else lmrSafety = 1.0;
 }
-const applyLMR =
+// LMR base gate: further restricted per-window inside searchMove().
+// NOTE: PV nodes are handled by disallowing LMR on full-window searches.
+const lmrLevelEnabled = !(typeof state !== 'undefined' && state && state.aiLevel === 10); // quick experiment gate
+const applyLMRBase =
+	lmrLevelEnabled &&
 	!inChk &&
 	isQuiet &&
 	!isTTMove &&
-	depth >= 3 &&
-	i >= 4;
+	depth >= 4 &&
+	i >= 6 &&
+	!killerHit &&
+	// Don't reduce "known good" quiets.
+	histVal < 1500;
 
 			const searchMove = (winA, winB) => {
 				let res;
+				// Only apply LMR on the PVS probe (null-window) searches.
+				// This avoids reducing PV/full-window re-searches which can hide tactics.
+				const isNullWindow = Number.isFinite(winA) && Number.isFinite(winB) && (winB === winA + 1);
+				const applyLMR = applyLMRBase && isNullWindow;
 				if (applyLMR) {
 					const dIdx = Math.min(newDepth, LMR_MAX_DEPTH);
 					const mIdx = Math.min(i + 1, LMR_MAX_MOVES);
 					let reduction = LMR_TABLE[dIdx][mIdx] || 0;
 					reduction = Math.round(reduction * lmrSafety);
+					// Keep LMR conservative to avoid tactical oversights.
+					if (reduction > 2) reduction = 2;
 					const reducedDepth = Math.max(1, newDepth - reduction);
 					if (reducedDepth < newDepth) {
-						const shallow = searchBestMove(nextCtx, reducedDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1);
+						const shallow = searchBestMove(nextCtx, reducedDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1, mv);
+						// Re-search at full depth if the reduced search could affect the node bounds.
 						const improves = turn === povColor ? shallow.score > winA : shallow.score < winB;
-						res = improves ? searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1) : shallow;
+						res = improves ? searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1, mv) : shallow;
 					} else {
-						res = searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1);
+						res = searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1, mv);
 					}
 				} else {
-					res = searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1);
+					res = searchBestMove(nextCtx, newDepth, winA, winB, povColor, enemy, deadlineMs, ply + 1, mv);
 				}
 				if (!Number.isFinite(res.score)) res = { ...res, score: 0 };
+				// Soft repetition bias (pawn units): nudge away from repetition when
+				// winning, nudge toward it when losing.
+				if (!res.cut) {
+					try {
+						const nextKey = repetitionKeyFor(nextCtx.board, nextCtx.castling, nextCtx.enPassant, enemy);
+						const existing = repExistingCount(nextKey);
+						if (existing > 0) res = { ...res, score: res.score + repetitionDrawishBias(staticEval, existing, depth) };
+					} catch (e) {
+						// ignore
+					}
+					// Soft 50-move/no-progress bias: discourage quiet drift when winning,
+					// encourage it when losing (drawing resource).
+					const moverIsPawn = !!(moverPiece && moverPiece.type === "P");
+					const isNoProgress = !isCapture && !moverIsPawn;
+					const fmBias = fiftyMoveNoProgressBias(staticEval, isNoProgress, depth);
+					if (fmBias) res = { ...res, score: res.score + fmBias };
+				}
 				return res;
 			};
 
@@ -895,14 +1192,14 @@ const applyLMR =
 				if (res.score > bestScore) { bestScore = res.score; bestMove = mv; }
 				alpha = Math.max(alpha, res.score);
 				if (beta <= alpha) {
-					storeHeuristics(mv, turn, depth, ply);
+					storeHeuristics(mv, turn, depth, ply, ctx.board, prevMove);
 					return { score: res.score, move: mv };
 				}
 			} else {
 				if (res.score < bestScore) { bestScore = res.score; bestMove = mv; }
 				beta = Math.min(beta, res.score);
 				if (beta <= alpha) {
-					storeHeuristics(mv, turn, depth, ply);
+					storeHeuristics(mv, turn, depth, ply, ctx.board, prevMove);
 					return { score: res.score, move: mv };
 				}
 			}
@@ -914,18 +1211,22 @@ const applyLMR =
 		else if (bestScore >= betaOrig) flag = "LOW";
 		ttStore(hash, { depth, score: bestScore, move: bestMove, flag, age: searchAge }, ply);
 		return { score: bestScore, move: bestMove };
+		} finally {
+			if (repPushed) repPop();
+		}
 	}
 
-	function storeHeuristics(mv, color, depth, ply) {
+	function storeHeuristics(mv, color, depth, ply, board, prevMove = null) {
 		const idxFrom = mv.from.y * 8 + mv.from.x;
 		const idxTo = mv.to.y * 8 + mv.to.x;
 		const colorIdx = color === LIGHT ? 0 : 1;
-		const target = mv.enPassant ? { type: "P" } : null;
+		const b = board || state?.board;
+		const target = mv.enPassant ? { type: "P" } : (b?.[mv.to.y]?.[mv.to.x] || null);
 		const isCapture = !!target;
 		const isPromo = !!mv.promo;
 		const isQuiet = !isCapture && !isPromo;
 		if (isQuiet) {
-			const safety = getMoveSafety(state.board, mv, color);
+			const safety = getMoveSafety(b, mv, color);
 			const bonus = Math.round(depth * depth * safety);
 			const capped = Math.min(200_000, historyHeur[colorIdx][idxFrom][idxTo] + bonus);
 			historyHeur[colorIdx][idxFrom][idxTo] = capped;
@@ -937,21 +1238,16 @@ const applyLMR =
 					k[0] = mv;
 				}
 			}
-// Record countermove
-if (previousMove) {
-    const pFrom = previousMove.from.y * 8 + previousMove.from.x;
-    const pTo = previousMove.to.y * 8 + previousMove.to.x;
-    counterMoves[colorIdx][pFrom][pTo] = mv;
-
-	// Continuation history bonus
-	const safety = getMoveSafety(state.board, mv, color);
-	const bonus = Math.round(depth * depth * safety);
-	continuationHistory[colorIdx][pFrom][pTo] =
-		Math.min(200_000, continuationHistory[colorIdx][pFrom][pTo] + bonus);
-}
-
-// Update previousMove
-previousMove = mv;
+			// Record countermove/continuation only for quiet moves.
+			if (prevMove) {
+				const pFrom = prevMove.from.y * 8 + prevMove.from.x;
+				const pTo = prevMove.to.y * 8 + prevMove.to.x;
+				counterMoves[colorIdx][pFrom][pTo] = mv;
+				const contSafety = getMoveSafety(b, mv, color);
+				const contBonus = Math.round(depth * depth * contSafety);
+				continuationHistory[colorIdx][pFrom][pTo] =
+					Math.min(200_000, continuationHistory[colorIdx][pFrom][pTo] + contBonus);
+			}
 
 			
 
@@ -982,6 +1278,10 @@ previousMove = mv;
 
 
 	function aiChooseMove() {
+		SEARCH_ABORT = false;
+		if (typeof window !== 'undefined' && !window.abortSearch) {
+			window.abortSearch = function() { SEARCH_ABORT = true; };
+		}
 		const legal = generateLegalMoves(state.aiColor);
 		if (!legal.length) return null;
 		const settings = getDifficultySettings(state.aiLevel);
@@ -997,11 +1297,14 @@ previousMove = mv;
 		seePruneMain = 0;
 		seePruneQ = 0;
 		searchAge += 1;
+		maybeDecayHeuristics();
 
 		const ctx = cloneCtx(state.board, state.castling, state.enPassant);
 		const maxDepth = settings.searchDepth;
 		const deadline = Date.now() + Math.max(80, settings.thinkTimeMs * 1.3);
-		let best = { move: legal[Math.floor(Math.random() * legal.length)], score: 0 };
+		// Deterministic fallback: if the search is interrupted before returning a move,
+		// never pick a random legal move (especially important for "Engine Strength").
+		let best = { move: legal[0], score: -Infinity };
 		let prevScore = 0;
 
 		// Iterative deepening with aspiration windows (scores are in pawns)
@@ -1010,32 +1313,58 @@ previousMove = mv;
 
 			let alpha = -Infinity;
 			let beta = Infinity;
-			let aspWindow = 0.50; // pawns
+			// Start with a tighter window; widen asymmetrically on fail-low/high.
+			const ASP_INIT = 0.25; // pawns
+			let aspDown = ASP_INIT;
+			let aspUp = ASP_INIT;
+			const ASP_MAX = 32; // pawns
+			const ASP_RETRIES = 3;
+			const ASP_TIME_GUARD_MS = 12;
 
 			if (d > 1 && Number.isFinite(prevScore)) {
-				alpha = prevScore - aspWindow;
-				beta = prevScore + aspWindow;
+				alpha = prevScore - aspDown;
+				beta = prevScore + aspUp;
 			}
 
 			let res = null;
 			let attempts = 0;
-			while (attempts < 4) {
+			while (attempts < ASP_RETRIES) {
+				if (Date.now() + ASP_TIME_GUARD_MS > deadline) break;
 				res = searchBestMove(ctx, d, alpha, beta, state.aiColor, state.aiColor, deadline, 0);
 				if (!res || res.cut || Date.now() > deadline) break;
 
-				// If aspiration failed, widen window and retry.
-				if (Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
-					attempts++;
-					aspWindow = Math.min(aspWindow * 2, 32);
-					alpha = prevScore - aspWindow;
-					beta = prevScore + aspWindow;
-					continue;
+				// If aspiration failed, widen asymmetrically and retry.
+				if (d > 1 && Number.isFinite(prevScore)) {
+					const failLow = res.score <= alpha;
+					const failHigh = res.score >= beta;
+					if (failLow || failHigh) {
+						attempts++;
+						if (failLow) {
+							aspDown = Math.min(aspDown * 2, ASP_MAX);
+							// Keep the opposite side tighter for stability, but let it grow
+							// slightly after the first miss to reduce ping-pong.
+							if (attempts >= 2) aspUp = Math.min(aspUp * 2, ASP_MAX);
+						} else {
+							aspUp = Math.min(aspUp * 2, ASP_MAX);
+							if (attempts >= 2) aspDown = Math.min(aspDown * 2, ASP_MAX);
+						}
+						alpha = prevScore - aspDown;
+						beta = prevScore + aspUp;
+						continue;
+					}
 				}
 				break;
 			}
 
 			// If we never got a stable score inside the window, fall back to full window once.
-			if (res && !res.cut && Number.isFinite(prevScore) && (res.score <= alpha || res.score >= beta)) {
+			if (
+				res &&
+				!res.cut &&
+				d > 1 &&
+				Number.isFinite(prevScore) &&
+				(res.score <= alpha || res.score >= beta) &&
+				(Date.now() + ASP_TIME_GUARD_MS <= deadline)
+			) {
 				res = searchBestMove(ctx, d, -Infinity, Infinity, state.aiColor, state.aiColor, deadline, 0);
 			}
 
@@ -1050,7 +1379,7 @@ previousMove = mv;
 		if (typeof window !== 'undefined' && window.DEBUG_ENGINE) {
 			console.debug("SEE pruning", { main: seePruneMain, qsearch: seePruneQ, depth: best.move ? maxDepth : 0 });
 		}
-		let choice = best.move || legal[Math.floor(Math.random() * legal.length)];
+		let choice = best.move || legal[0];
 		if (settings.blunderChance > 0 && Math.random() < settings.blunderChance) {
 			const others = legal.filter(mv => mv !== choice);
 			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
@@ -1065,11 +1394,13 @@ previousMove = mv;
 function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 	// Reset node counter for accurate reporting (UI only; safe no-op if unavailable).
 	try { if (typeof SEARCH_NODES !== 'undefined') SEARCH_NODES = 0; } catch (e) { /* ignore */ }
+	searchAge += 1;
+	maybeDecayHeuristics();
 	const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 
 	if (numLines <= 1) {
 		// Single-PV mode: use existing search
-		const result = searchBestMove(ctx, depth, -Infinity, Infinity, povColor, turn, deadlineMs, 0);
+		const result = searchBestMove(ctx, depth, -Infinity, Infinity, povColor, turn, deadlineMs, 0, null);
 		const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 		const nodes = (typeof SEARCH_NODES !== 'undefined') ? SEARCH_NODES : 0;
 		return [{
@@ -1117,7 +1448,8 @@ function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 			)),
 			ctx.board,
 			0,
-			ttEntry?.move || null
+			ttEntry?.move || null,
+			null
 		);
 
 		if (!candidateMoves.length) break;
@@ -1140,7 +1472,8 @@ function searchMultiPV(ctx, depth, povColor, turn, deadlineMs, numLines) {
 				povColor,
 				enemy,
 				deadlineMs,
-				1
+				1,
+				mv
 			);
 
 			if (res.cut) break;

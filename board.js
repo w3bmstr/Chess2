@@ -3,7 +3,7 @@
 // ============================================================================
 const COLS = 8;
 const ROWS = 8;
-const dpr = window.devicePixelRatio || 1;
+const dpr = (typeof window !== "undefined" && window.devicePixelRatio) ? window.devicePixelRatio : 1;
 const LIGHT = 1;
 const DARK = 2;
 
