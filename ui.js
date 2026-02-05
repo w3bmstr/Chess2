@@ -7953,6 +7953,17 @@ function getOpeningName(moveHistory) {
 
 function renderMoveList() {
 	if (!moveList) return;
+  const isMobileNav = document.body.classList.contains('mobile-nav');
+  const drawerContent = isMobileNav ? document.getElementById('drawer-content') : null;
+  const prevDrawerScrollTop = drawerContent ? drawerContent.scrollTop : null;
+  const prevMoveListScrollTop = moveList.scrollTop;
+  const prevMoveListAtBottom = (moveList.scrollTop + moveList.clientHeight >= moveList.scrollHeight - 4);
+  const prevExplorer = document.getElementById('openings-explorer');
+  const prevExplorerOpen = !!(prevExplorer && prevExplorer.style.display !== 'none');
+  const prevExplorerFilter = document.getElementById('openings-explorer-filter');
+  const prevExplorerFilterVal = prevExplorerFilter ? prevExplorerFilter.value : '';
+  const prevExplorerGroup = document.getElementById('openings-explorer-group');
+  const prevExplorerGroupVal = prevExplorerGroup ? prevExplorerGroup.value : 'All';
 	const sq = (x, y) => `${String.fromCharCode(97 + x)}${ROWS - y}`;
 	const moves = state.moveHistory;
 
@@ -8211,13 +8222,9 @@ function renderMoveList() {
   const explorerResults = document.createElement('div');
   explorerResults.id = 'openings-explorer-results';
   explorerResults.style.marginTop = '8px';
-  // Make results scrollable on mobile without affecting the background.
-  explorerResults.style.maxHeight = '52vh';
-  explorerResults.style.overflowY = 'auto';
-  explorerResults.style.overflowX = 'hidden';
-  explorerResults.style.webkitOverflowScrolling = 'touch';
-  explorerResults.style.overscrollBehavior = 'contain';
-  explorerResults.style.touchAction = 'pan-y';
+  // Avoid nested scrolling: let the drawer content handle scrolling.
+  explorerResults.style.maxHeight = 'none';
+  explorerResults.style.overflow = 'visible';
 
   explorer.appendChild(explorerHeader);
   explorer.appendChild(explorerMeta);
@@ -8445,7 +8452,6 @@ searchBox.addEventListener('input', function() {
     btnRow.className = 'fen-pgn-btn-row';
 
 
-  const isMobileNav = document.body.classList.contains('mobile-nav');
   if (isMobileNav) {
     const header = moveList.querySelector('#opening-name');
     const anchor = header ? header.nextElementSibling : null;
@@ -8466,8 +8472,31 @@ searchBox.addEventListener('input', function() {
     moveList.appendChild(searchBox);
     moveList.appendChild(resultsDiv);
   }
-    // Scroll to bottom
-    moveList.scrollTop = moveList.scrollHeight;
+    // Restore explorer open state + filter selection after rerenders.
+    try {
+      const explorerNow = document.getElementById('openings-explorer');
+      const filterNow = document.getElementById('openings-explorer-filter');
+      const groupNow = document.getElementById('openings-explorer-group');
+      if (groupNow) groupNow.value = prevExplorerGroupVal;
+      if (filterNow) filterNow.value = prevExplorerFilterVal;
+      if (explorerNow && prevExplorerOpen) {
+        explorerNow.style.display = 'block';
+        // Refresh list for current filter/group.
+        try {
+          const meta = document.getElementById('openings-explorer-meta');
+          if (meta) meta.textContent = meta.textContent; // no-op; keeps layout stable
+        } catch (e) { /* ignore */ }
+      }
+    } catch (e) { /* ignore */ }
+
+    // Avoid forcing scroll while the user is browsing (especially on mobile).
+    if (drawerContent && prevDrawerScrollTop !== null) {
+      drawerContent.scrollTop = prevDrawerScrollTop;
+    } else if (!isMobileNav && prevMoveListAtBottom && !prevExplorerOpen) {
+      moveList.scrollTop = moveList.scrollHeight;
+    } else {
+      moveList.scrollTop = prevMoveListScrollTop;
+    }
 
 }
 
