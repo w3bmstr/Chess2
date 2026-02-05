@@ -8319,13 +8319,16 @@ function renderMoveList() {
     // Show search results list and let user click to load specific game
     const resultsDiv = document.createElement('div');
     resultsDiv.id = 'pgnSearchResults';
-    // Avoid nested scrolling: the parent panel/drawer is already scrollable.
-    // Nested `overflow:auto` containers on mobile often swallow taps as scroll gestures.
-    resultsDiv.style.maxHeight = 'none';
-    resultsDiv.style.overflow = 'visible';
+  // Make results independently scrollable so you can browse long lists
+  // even while the keyboard is open.
+  resultsDiv.style.maxHeight = '45vh';
+  resultsDiv.style.overflowY = 'auto';
+  resultsDiv.style.overflowX = 'hidden';
+  resultsDiv.style.webkitOverflowScrolling = 'touch';
+  resultsDiv.style.overscrollBehavior = 'contain';
+  resultsDiv.style.touchAction = 'pan-y';
     resultsDiv.style.margin = '6px 0 12px 0';
     resultsDiv.style.display = 'none';
-    resultsDiv.style.touchAction = 'manipulation';
 
     function buildLabelUI(g, i) {
         const t = g.tags || {};
@@ -8391,11 +8394,9 @@ searchBox.addEventListener('input', function() {
 			});
           };
 
-    			// Prefer early events for touch devices.
-    			item.addEventListener('pointerdown', applyOpening);
-    			item.addEventListener('touchstart', applyOpening, { passive: false });
-    			item.addEventListener('mousedown', applyOpening);
-    			item.addEventListener('click', applyOpening);
+          // Important: don't bind pointerdown/touchstart here.
+          // On mobile it hijacks swipe-to-scroll and makes the list feel glitchy.
+          item.addEventListener('click', applyOpening);
     			item.addEventListener('keydown', (e) => {
     				if (e.key === 'Enter' || e.key === ' ') applyOpening(e);
     			});
