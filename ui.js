@@ -8234,18 +8234,15 @@ function renderMoveList() {
     const isOpen = explorer.style.display !== 'none';
     explorer.style.display = isOpen ? 'none' : 'block';
     if (!isOpen) {
+      // Prevent Android keyboard from popping up when opening the explorer.
+      // Only show the keyboard if the user explicitly taps the filter field.
+      try {
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
+      } catch (e) { /* ignore */ }
+      try { explorerFilter.blur(); } catch (e) { /* ignore */ }
+
       renderExplorerResults();
-    // On Android, auto-focusing an input pops up the keyboard.
-    // Only auto-focus on non-touch (desktop) environments.
-    let isCoarse = false;
-    try {
-    isCoarse = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
-      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
-      ('ontouchstart' in window);
-    } catch (e) { /* ignore */ }
-    if (!isCoarse) {
-    setTimeout(() => { try { explorerFilter.focus(); } catch (e) { /* ignore */ } }, 0);
-    }
     }
   };
   explorerClose.onclick = () => { explorer.style.display = 'none'; };
