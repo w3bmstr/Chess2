@@ -325,7 +325,23 @@
   }
 
   // Expose for browser console and for the Node harness.
+  const api = {
+    runAll: runCoreEngineTests,
+    runPerftTests,
+    runEvalTests,
+    runSearchTests,
+    perftFromFEN,
+    evalFenForWhite,
+    searchFromFEN,
+    resetSearchHeuristics,
+    setupMinimalStateFromFEN,
+    fmtMove,
+    fmtPV
+  };
+
   try { window.runCoreEngineTests = runCoreEngineTests; } catch (e) { /* ignore */ }
   try { global.runCoreEngineTests = runCoreEngineTests; } catch (e) { /* ignore */ }
+  try { window.coreEngineTest = api; } catch (e) { /* ignore */ }
+  try { global.coreEngineTest = api; } catch (e) { /* ignore */ }
 
 })();

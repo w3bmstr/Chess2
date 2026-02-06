@@ -116,12 +116,15 @@ self.onmessage = (ev) => {
 			const t0 = nowMs();
 			const mv = aiChooseMove();
 			const t1 = nowMs();
+			const info = (typeof SEARCH_LAST_INFO === 'object' && SEARCH_LAST_INFO) ? SEARCH_LAST_INFO : null;
 			self.postMessage({
 				type: "result",
 				requestId,
 				token,
 				kind: "search",
 				move: sanitizeMoveForMainThread(mv),
+				depth: info && Number.isFinite(info.depth) ? info.depth : undefined,
+				score: info && Number.isFinite(info.score) ? info.score : undefined,
 				nodes: (typeof SEARCH_NODES === 'number') ? SEARCH_NODES : 0,
 				timeMs: Math.max(0, Math.round(t1 - t0))
 			});

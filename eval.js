@@ -14,6 +14,48 @@ function isAttacked(board, x, y, color) {
 	return false;
 }
 
+function isPinned(board, kingPos, x, y, color) {
+	const king = kingPos[color];
+	if (!king) return false;
+
+	const dx = king.x - x;
+	const dy = king.y - y;
+	const adx = Math.abs(dx), ady = Math.abs(dy);
+	if (!(dx === 0 || dy === 0 || adx === ady)) return false;
+
+	const stepX = dx === 0 ? 0 : (dx > 0 ? 1 : -1);
+	const stepY = dy === 0 ? 0 : (dy > 0 ? 1 : -1);
+
+	let cx = x + stepX;
+	let cy = y + stepY;
+	while (cx !== king.x || cy !== king.y) {
+		const pc = board[cy][cx];
+		if (pc) return false;
+		cx += stepX;
+		cy += stepY;
+	}
+
+	const enemy = color === LIGHT ? DARK : LIGHT;
+	cx = king.x + stepX;
+	cy = king.y + stepY;
+	while (cx >= 0 && cx < COLS && cy >= 0 && cy < ROWS) {
+		const pc = board[cy][cx];
+		if (pc) {
+			if (pc.color === enemy) {
+				if (stepX === 0 || stepY === 0) {
+					if (pc.type === "R" || pc.type === "Q") return true;
+				} else {
+					if (pc.type === "B" || pc.type === "Q") return true;
+				}
+			}
+			break;
+		}
+		cx += stepX;
+		cy += stepY;
+	}
+	return false;
+}
+
 // Fortress/endgame pattern recognition for draw-machine
 function isWrongBishopRookPawnFortress(board) {
 	// Detect K+B vs K+P (rook pawn) with bishop of wrong color
@@ -431,6 +473,8 @@ function isDefended(board, x, y, color) {
 	}
 	return false;
 }
+if (typeof window !== "undefined") window.isDefended = isDefended;
+if (typeof global !== "undefined") global.isDefended = isDefended;
 	// ...existing code...
 		
 // ...existing code...
@@ -808,13 +852,188 @@ function isDefended(board, x, y, color) {
 				const pc = board[y][x];
 				if (!pc || pc.type === "K") continue;
 				if (isAttacked(board, x, y, pc.color) && !isDefended(board, x, y, pc.color)) {
-					// Penalize hanging pieces, scaled by value
+					// Penalize hanging pieces (en prise and undefended).
 					const penalty = (PIECE_VALUES[pc.type] || 1) * 40;
 					hangingPenalty += (pc.color === povColor ? -penalty : penalty);
 				}
 			}
 		}
 		score += hangingPenalty;
+
+		// --- Pin penalty: avoid walking into immediate pins ---
+		function pinPenalty(board, kingPos, color) {
+			let penalty = 0;
+			for (let y = 0; y < ROWS; y++) {
+				for (let x = 0; x < COLS; x++) {
+					const pc = board[y][x];
+					if (!pc || pc.color !== color) continue;
+					if (pc.type === "K") continue;
+
+					if (isPinned(board, kingPos, x, y, color)) {
+						const base = (PIECE_VALUES[pc.type] || 1) * 20;
+						let scale = 1.0;
+						if (pc.type === "N" || pc.type === "B") scale = 1.5;
+						penalty += base * scale;
+					}
+				}
+			}
+			return penalty;
+		}
+
+		const pinW = pinPenalty(board, kingPos, LIGHT);
+		const pinB = pinPenalty(board, kingPos, DARK);
+		score += (pinW - pinB) * (povColor === LIGHT ? 1 : -1);
+
+		// Tactical threat heuristic: minor attacked by pawn, SEE < 0, undefended, and a safe response exists.
+		let pawnThreatPenalty = 0;
+		try {
+			const turnColor = (typeof state !== 'undefined' && state && state.turn) ? state.turn : null;
+			const hasSee = (typeof SEE === 'function') || (typeof see === 'function');
+			if (turnColor && turnColor === povColor && hasSee && typeof generateLegalMovesFor === 'function' && typeof simulateMove === 'function') {
+				const castling = (typeof state !== 'undefined' && state.castling) ? state.castling : initialCastling();
+				const enPassant = (typeof state !== 'undefined' && state.enPassant) ? state.enPassant : null;
+				const legal = generateLegalMovesFor(board, castling, enPassant, turnColor);
+
+				const getSEE = (b, mv) => (typeof SEE === 'function') ? SEE(b, mv) : see(b, mv);
+
+				function isDefendedLocal(b, x, y, color, cst, ep) {
+					for (let yy = 0; yy < ROWS; yy++) {
+						for (let xx = 0; xx < COLS; xx++) {
+							const pc = b[yy][xx];
+							if (!pc || pc.color !== color) continue;
+							if (xx === x && yy === y) continue;
+							const moves = genPseudoMovesForSquare(xx, yy, b, cst, ep);
+							if (moves.some(mv => mv.to.x === x && mv.to.y === y)) return true;
+						}
+					}
+					return false;
+				}
+
+				function pawnAttackers(b, x, y, enemyColor) {
+					const res = [];
+					const dy = enemyColor === LIGHT ? 1 : -1;
+					const py = y + dy;
+					if (py >= 0 && py < ROWS) {
+						const lx = x - 1;
+						const rx = x + 1;
+						if (lx >= 0 && lx < COLS) {
+							const pc = b[py][lx];
+							if (pc && pc.color === enemyColor && pc.type === 'P') res.push({ x: lx, y: py });
+						}
+						if (rx >= 0 && rx < COLS) {
+							const pc = b[py][rx];
+							if (pc && pc.color === enemyColor && pc.type === 'P') res.push({ x: rx, y: py });
+						}
+					}
+					return res;
+				}
+
+				function isMinorPawnThreatened(b, x, y, color, cst, ep) {
+					const pc = b[y][x];
+					if (!pc || pc.color !== color || (pc.type !== 'N' && pc.type !== 'B')) return false;
+					if (isDefendedLocal(b, x, y, color, cst, ep)) return false;
+					const enemy = color === LIGHT ? DARK : LIGHT;
+					const attackers = pawnAttackers(b, x, y, enemy);
+					for (const a of attackers) {
+						const mv = { from: { x: a.x, y: a.y }, to: { x, y } };
+						const seeScoreAttacker = getSEE(b, mv);
+						const seeScoreDefender = -seeScoreAttacker;
+						if (seeScoreDefender < 0) return true;
+					}
+					return false;
+				}
+
+				for (let y = 0; y < ROWS; y++) {
+					for (let x = 0; x < COLS; x++) {
+						const pc = board[y][x];
+						if (!pc || pc.color !== turnColor) continue;
+						if (pc.type !== 'N' && pc.type !== 'B') continue;
+						if (!isMinorPawnThreatened(board, x, y, turnColor, castling, enPassant)) continue;
+
+						let safeExists = false;
+						for (const mv of legal) {
+							const next = simulateMove(mv, board, castling, enPassant);
+							if (mv.from && mv.from.x === x && mv.from.y === y) { safeExists = true; break; }
+							const pcNext = next.board?.[y]?.[x];
+							if (!pcNext || pcNext.color !== turnColor || (pcNext.type !== 'N' && pcNext.type !== 'B')) { safeExists = true; break; }
+							if (!isMinorPawnThreatened(next.board, x, y, turnColor, next.castling, next.enPassant)) { safeExists = true; break; }
+						}
+
+						if (safeExists) pawnThreatPenalty += (PIECE_VALUES[pc.type] || 3) * 120;
+					}
+				}
+			}
+		} catch (e) { /* ignore */ }
+		score -= pawnThreatPenalty;
+
+		// Tactical threat heuristic: opponent can create a winning pin next move.
+		let pinThreatPenalty = 0;
+		try {
+			const turnColor = (typeof state !== 'undefined' && state && state.turn) ? state.turn : null;
+			const hasSee = (typeof SEE === 'function') || (typeof see === 'function');
+			if (turnColor && turnColor === povColor && hasSee && typeof generateLegalMovesFor === 'function' && typeof simulateMove === 'function') {
+				const enemy = turnColor === LIGHT ? DARK : LIGHT;
+				const castling = (typeof state !== 'undefined' && state.castling) ? state.castling : initialCastling();
+				const enPassant = (typeof state !== 'undefined' && state.enPassant) ? state.enPassant : null;
+				const enemyMoves = generateLegalMovesFor(board, castling, enPassant, enemy);
+				const getSEE = (b, mv) => (typeof SEE === 'function') ? SEE(b, mv) : see(b, mv);
+
+				function isDefendedLocal(b, x, y, color, cst, ep) {
+					for (let yy = 0; yy < ROWS; yy++) {
+						for (let xx = 0; xx < COLS; xx++) {
+							const pc = b[yy][xx];
+							if (!pc || pc.color !== color) continue;
+							if (xx === x && yy === y) continue;
+							const moves = genPseudoMovesForSquare(xx, yy, b, cst, ep);
+							if (moves.some(mv => mv.to.x === x && mv.to.y === y)) return true;
+						}
+					}
+					return false;
+				}
+
+				function findKings(b) {
+					const kp = { [LIGHT]: null, [DARK]: null };
+					for (let y = 0; y < ROWS; y++) {
+						for (let x = 0; x < COLS; x++) {
+							const pc = b[y][x];
+							if (pc && pc.type === 'K') kp[pc.color] = { x, y };
+						}
+					}
+					return kp;
+				}
+
+				for (const emv of enemyMoves) {
+					const after = simulateMove(emv, board, castling, enPassant);
+					const kp = findKings(after.board);
+					const enemyCaps = generateLegalMovesFor(after.board, after.castling, after.enPassant, enemy);
+					let found = false;
+					for (let y = 0; y < ROWS; y++) {
+						for (let x = 0; x < COLS; x++) {
+							const pc = after.board[y][x];
+							if (!pc || pc.color !== turnColor || pc.type === 'K') continue;
+							if (!isPinned(after.board, kp, x, y, turnColor)) continue;
+							if (!isAttacked(after.board, x, y, turnColor)) continue;
+							if (isDefendedLocal(after.board, x, y, turnColor, after.castling, after.enPassant)) continue;
+
+							for (const cap of enemyCaps) {
+								if (!cap.to || cap.to.x !== x || cap.to.y !== y) continue;
+								const seeScore = getSEE(after.board, cap);
+								if (seeScore >= 100) {
+									const v = (PIECE_VALUES[pc.type] || 1);
+									pinThreatPenalty += v * 35;
+									found = true;
+									break;
+								}
+							}
+							if (found) break;
+						}
+						if (found) break;
+					}
+					if (found) break;
+				}
+			}
+		} catch (e) { /* ignore */ }
+		score -= pinThreatPenalty;
 
 		// Rook open/semi-open file activity is handled by evaluateRookActivity(); avoid double-counting here.
 

@@ -470,6 +470,14 @@ if (typeof document !== 'undefined') {
             if (!wrapper) return;
             const isMobileNav = !!(document.body && document.body.classList && document.body.classList.contains('mobile-nav'));
 
+            const tools = document.getElementById('move-list-tools');
+            if (tools && isMobileNav) {
+                if (wrapper.parentNode !== tools) {
+                    tools.appendChild(wrapper);
+                }
+                return;
+            }
+
             if (isMobileNav) {
                 // Prefer the Moves panel so it naturally lives inside the mobile drawer.
                 const moveListPanel = document.getElementById('move-list');
@@ -561,85 +569,7 @@ if (typeof document !== 'undefined') {
     });
 }
 
-// ========== PGN Search Box ==========
-if (typeof document !== 'undefined') {
-    document.addEventListener('DOMContentLoaded', function() {
-        const moveListPanel = document.getElementById('move-list');
-        if (moveListPanel && !document.getElementById('pgnSearch')) {
-            const searchBox = document.createElement('input');
-            searchBox.id = 'pgnSearch';
-            searchBox.placeholder = 'Search games (by player, event, date)...';
-            searchBox.style.display = 'block';
-            searchBox.style.margin = '0 0 6px 0';
-            searchBox.style.width = '100%';
-            searchBox.style.pointerEvents = 'auto';
-            searchBox.style.zIndex = '20';
-            const stopAndFocus = function(e) { try { e.stopPropagation(); } catch (err) {} this.focus(); };
-            searchBox.addEventListener('mousedown', stopAndFocus);
-            searchBox.addEventListener('touchstart', stopAndFocus, { passive: true });
-            searchBox.addEventListener('pointerdown', stopAndFocus);
-
-            const resultsDiv = document.createElement('div');
-            resultsDiv.id = 'pgnSearchResults';
-            resultsDiv.style.maxHeight = '220px';
-            resultsDiv.style.overflow = 'auto';
-            resultsDiv.style.margin = '6px 0 12px 0';
-            resultsDiv.style.display = 'none';
-            resultsDiv.style.background = 'transparent';
-
-            function buildLabel(g, i) {
-                const t = g.tags || {};
-                return `${i + 1}: ${t.White || 'White'} vs ${t.Black || 'Black'}${t.Event ? ' — ' + t.Event : ''}${t.Date ? ' (' + t.Date + ')' : ''}`;
-            }
-
-            searchBox.addEventListener('input', function() {
-                const val = searchBox.value.trim().toLowerCase();
-                resultsDiv.innerHTML = '';
-                if (!val || val.length < 2) { resultsDiv.style.display = 'none'; return; }
-                if (!pgnGames || pgnGames.length === 0) {
-                    resultsDiv.innerHTML = '<div style="padding:6px;color:var(--muted)">No PGN games loaded. Click "Load PGN" to import games.</div>';
-                    resultsDiv.style.display = 'block';
-                    return;
-                }
-                const results = [];
-                for (let i = 0; i < pgnGames.length; i++) {
-                    try {
-                        const g = pgnGames[i];
-                        const hay = ((g.tags ? Object.values(g.tags).join(' ') : '') + ' ' + (g.moves || []).join(' ')).toLowerCase();
-                        if (hay.includes(val)) results.push({ index: i, game: g });
-                    } catch (err) { continue; }
-                }
-                if (results.length === 0) { resultsDiv.innerHTML = '<div style="padding:6px;color:var(--muted)">No matches</div>'; resultsDiv.style.display = 'block'; return; }
-                for (let r = 0; r < Math.min(results.length, 20); r++) {
-                    const item = document.createElement('div');
-                    item.className = 'pgn-search-item';
-                    item.style.padding = '6px 8px';
-                    item.style.borderRadius = '6px';
-                    item.style.cursor = 'pointer';
-                    item.style.color = 'var(--text)';
-                    item.style.marginBottom = '4px';
-                    item.textContent = buildLabel(results[r].game, results[r].index);
-                    item.addEventListener('click', () => {
-                        currentGameIndex = results[r].index;
-                        loadSingleGame(pgnGames[currentGameIndex]);
-                        resultsDiv.style.display = 'none';
-                        searchBox.value = '';
-                    });
-                    resultsDiv.appendChild(item);
-                }
-                resultsDiv.style.display = 'block';
-            });
-
-            // Hide results when clicking outside
-            document.addEventListener('click', (e) => {
-                if (!resultsDiv.contains(e.target) && e.target !== searchBox) resultsDiv.style.display = 'none';
-            });
-
-            moveListPanel.parentNode.insertBefore(searchBox, moveListPanel);
-            moveListPanel.parentNode.insertBefore(resultsDiv, moveListPanel);
-        }
-    });
-}
+// PGN Search Box removed: unified search lives in ui.js (Openings/PGN/Both).
 
 // ========== Move List Comment Display ==========
 // Patch for move list rendering: show comment under move in smaller font

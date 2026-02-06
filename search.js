@@ -150,6 +150,9 @@ var SEARCH_NODES = 0;
 // Global abort flag: lets UI (and iterative deepening) stop thinking quickly.
 // Checked frequently in search/quiescence to keep interrupts responsive.
 var SEARCH_ABORT = false;
+// Last completed AI search info (for UI/worker reporting).
+// In the main thread this ends up on window; in the worker it's just a global.
+var SEARCH_LAST_INFO = null;
 const PAWN_TT_SIZE = 1 << 16;
 const PAWN_TT = Array(PAWN_TT_SIZE).fill(null);
 const EVAL_TT_SIZE = 1 << 16;
@@ -1305,6 +1308,7 @@ const applyLMRBase =
 		// Deterministic fallback: if the search is interrupted before returning a move,
 		// never pick a random legal move (especially important for "Engine Strength").
 		let best = { move: legal[0], score: -Infinity };
+		let reachedDepth = 0;
 		let prevScore = 0;
 
 		// Iterative deepening with aspiration windows (scores are in pawns)
@@ -1371,6 +1375,7 @@ const applyLMRBase =
 			if (res && res.move) {
 				best = res;
 				prevScore = res.score;
+				reachedDepth = d;
 			}
 
 			if (!res || res.cut || Date.now() > deadline) break;
@@ -1384,6 +1389,13 @@ const applyLMRBase =
 			const others = legal.filter(mv => mv !== choice);
 			if (others.length) choice = others[Math.floor(Math.random() * others.length)];
 		}
+		try {
+			SEARCH_LAST_INFO = {
+				depth: reachedDepth,
+				score: (best && Number.isFinite(best.score)) ? best.score : 0,
+				nodes: (typeof SEARCH_NODES === 'number') ? SEARCH_NODES : 0
+			};
+		} catch (e) { /* ignore */ }
 		return choice;
 	}
 

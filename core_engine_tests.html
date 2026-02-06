@@ -4,9 +4,88 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Chess2 Core Engine Tests</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, Segoe UI, Arial, sans-serif; background: #0b0d13; color: #e7e9ee; }
+    header { padding: 12px 14px; border-bottom: 1px solid #22283a; background: #0f1320; }
+    header h1 { margin: 0; font-size: 16px; font-weight: 650; }
+    header .sub { margin-top: 6px; color: #aab0c0; font-size: 12px; }
+    main { display: grid; grid-template-columns: 420px 1fr; gap: 12px; padding: 12px; }
+    .panel { border: 1px solid #22283a; border-radius: 10px; background: #0f1320; overflow: hidden; }
+    .panel h2 { margin: 0; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #22283a; color: #cfd5e6; }
+    .panel .content { padding: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+    label { font-size: 12px; color: #aab0c0; }
+    input, textarea, select { width: 100%; box-sizing: border-box; background: #0b0d13; color: #e7e9ee; border: 1px solid #2a3148; border-radius: 8px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    textarea { min-height: 72px; resize: vertical; }
+    button { background: linear-gradient(135deg, #6ec1ff, #3f7cff); color: #0b0d13; border: 0; border-radius: 8px; padding: 8px 10px; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #1a2033; color: #e7e9ee; border: 1px solid #2a3148; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .cmd { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: #e7e9ee; background: #0b0d13; border: 1px solid #2a3148; border-radius: 8px; padding: 8px; margin: 8px 0; }
+    .hint { color: #aab0c0; font-size: 12px; line-height: 1.35; }
+    #out { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; padding: 12px; margin: 0; max-height: calc(100vh - 120px); overflow: auto; background: #090b10; }
+    .pill { display: inline-block; padding: 2px 8px; border: 1px solid #2a3148; border-radius: 999px; font-size: 11px; color: #aab0c0; margin-left: 8px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } #out { max-height: 45vh; } }
+  </style>
 </head>
 <body>
-  <pre>Open DevTools Console. Running core engine tests…</pre>
+  <header>
+    <h1>Chess2 Core Engine Tests <span class="pill">No UI</span></h1>
+    <div class="sub">Interactive harness for movegen (perft), eval, and search. Also mirrors console output below.</div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Commands</h2>
+      <div class="content">
+        <div class="hint">These are available in DevTools console <em>after</em> scripts load:</div>
+        <div class="cmd">runCoreEngineTests()</div>
+        <div class="cmd">runTacticalTests()</div>
+        <div class="cmd">coreEngineTest.runAll()</div>
+        <div class="cmd">coreEngineTest.perftFromFEN(fen, depth)</div>
+        <div class="cmd">coreEngineTest.evalFenForWhite(fen)</div>
+        <div class="cmd">coreEngineTest.searchFromFEN(fen, depth)</div>
+        <div class="hint">Tip: <code>searchFromFEN</code> returns { res, nodes, pv } where pv is a short principal variation.</div>
+
+        <div class="row">
+          <button id="btn-run-all" type="button">Run All Tests</button>
+          <button id="btn-clear" type="button" class="secondary">Clear Output</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Interactive</h2>
+      <div class="content">
+        <label>FEN</label>
+        <textarea id="fen" spellcheck="false">rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1</textarea>
+
+        <div class="row">
+          <div style="flex: 1;">
+            <label>Depth</label>
+            <input id="depth" type="number" min="1" max="8" value="4" />
+          </div>
+          <div style="flex: 1;">
+            <label>Perft Depth</label>
+            <input id="perftDepth" type="number" min="1" max="6" value="4" />
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="btn-eval" type="button">Eval (White POV)</button>
+          <button id="btn-search" type="button">Search Best Move</button>
+          <button id="btn-perft" type="button" class="secondary">Perft</button>
+        </div>
+
+        <div class="hint">Output is below; detailed objects are still in the console.</div>
+      </div>
+    </section>
+  </main>
+
+  <section class="panel" style="margin: 0 12px 12px 12px;">
+    <h2>Output</h2>
+    <pre id="out">Loading…</pre>
+  </section>
 
   <!-- Core engine only (no ui.js, no worker) -->
   <script src="board.js"></script>
@@ -16,14 +95,160 @@
   <script src="search.js"></script>
 
   <script src="core_engine_tests.js"></script>
+  <script src="tactical_tests.js"></script>
   <script>
-    // Run automatically.
-    try {
-      if (typeof runCoreEngineTests === 'function') runCoreEngineTests();
-      else console.error('runCoreEngineTests not found');
-    } catch (e) {
-      console.error('CORE ENGINE TESTS: FAIL', e);
-    }
+    (function () {
+      const out = document.getElementById('out');
+      const btnRunAll = document.getElementById('btn-run-all');
+      const btnClear = document.getElementById('btn-clear');
+      const btnEval = document.getElementById('btn-eval');
+      const btnSearch = document.getElementById('btn-search');
+      const btnPerft = document.getElementById('btn-perft');
+      const fenEl = document.getElementById('fen');
+      const depthEl = document.getElementById('depth');
+      const perftDepthEl = document.getElementById('perftDepth');
+
+      function appendLine(s) {
+        if (!out) return;
+        out.textContent += String(s) + '\n';
+        out.scrollTop = out.scrollHeight;
+      }
+
+      function clearOut() {
+        if (!out) return;
+        out.textContent = '';
+      }
+
+      function safeJson(value, maxLen) {
+        const seen = new WeakSet();
+        let s = '';
+        try {
+          s = JSON.stringify(value, (k, v) => {
+            if (typeof v === 'object' && v !== null) {
+              if (seen.has(v)) return '[Circular]';
+              seen.add(v);
+            }
+            if (typeof v === 'function') return '[Function]';
+            return v;
+          });
+        } catch (e) {
+          try { s = String(value); } catch (err) { s = '[Unprintable]'; }
+        }
+        if (typeof maxLen === 'number' && s.length > maxLen) return s.slice(0, maxLen) + '…';
+        return s;
+      }
+
+      function fmtMoveObj(mv) {
+        if (!mv) return '(none)';
+        if (mv.castle === 'kingside') return 'O-O';
+        if (mv.castle === 'queenside') return 'O-O-O';
+        const sq = (x, y) => String.fromCharCode(97 + x) + (8 - y);
+        const promo = mv.promo ? ('=' + mv.promo) : '';
+        const ep = mv.enPassant ? ' e.p.' : '';
+        if (mv.from && mv.to) return sq(mv.from.x, mv.from.y) + sq(mv.to.x, mv.to.y) + promo + ep;
+        return safeJson(mv, 160);
+      }
+
+      function prettyArg(a) {
+        if (a instanceof Error) {
+          return a && (a.stack || a.message) ? String(a.stack || a.message) : '[Error]';
+        }
+        if (typeof a === 'string') return a;
+        if (typeof a === 'number' || typeof a === 'boolean' || a === null || a === undefined) return String(a);
+
+        // Recognize our common search result shape: { res, nodes, pv }
+        if (a && typeof a === 'object' && a.res && typeof a.nodes === 'number') {
+          const res = a.res || {};
+          return `searchResult { move=${fmtMoveObj(res.move)} score=${res.score} nodes=${a.nodes} pvLen=${Array.isArray(a.pv) ? a.pv.length : 0} }`;
+        }
+
+        // Fallback: compact JSON
+        return safeJson(a, 220);
+      }
+
+      // Mirror console output into the page.
+      const origLog = console.log.bind(console);
+      const origErr = console.error.bind(console);
+      console.log = (...args) => { origLog(...args); try { appendLine(args.map(prettyArg).join(' ')); } catch (e) {} };
+      console.error = (...args) => { origErr(...args); try { appendLine('[ERR] ' + args.map(prettyArg).join(' ')); } catch (e) {} };
+
+      function requireAPI() {
+        if (typeof window.coreEngineTest !== 'object' || !window.coreEngineTest) {
+          throw new Error('coreEngineTest API not found (core_engine_tests.js failed to load?)');
+        }
+        return window.coreEngineTest;
+      }
+
+      function getFen() { return (fenEl && fenEl.value ? fenEl.value : '').trim(); }
+      function getDepth(el) {
+        const n = Number(el && el.value);
+        return Number.isFinite(n) ? Math.max(1, n | 0) : 1;
+      }
+
+      btnClear && btnClear.addEventListener('click', () => clearOut());
+      btnRunAll && btnRunAll.addEventListener('click', () => {
+        try {
+          const api = requireAPI();
+          appendLine('=== RUN ALL ===');
+          api.runAll();
+          if (typeof runTacticalTests === 'function') runTacticalTests();
+          else console.error('runTacticalTests not found');
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      btnEval && btnEval.addEventListener('click', () => {
+        try {
+          const api = requireAPI();
+          const fen = getFen();
+          const score = api.evalFenForWhite(fen);
+          appendLine(`EVAL (white): ${score}`);
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      btnSearch && btnSearch.addEventListener('click', () => {
+        try {
+          const api = requireAPI();
+          const fen = getFen();
+          const depth = getDepth(depthEl);
+          const s = api.searchFromFEN(fen, depth);
+          appendLine(`SEARCH depth ${depth}: move=${api.fmtMove(s.res.move)} score=${s.res.score} nodes=${s.nodes} pv=${api.fmtPV(s.pv)}`);
+          console.log('search result object:', s);
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      btnPerft && btnPerft.addEventListener('click', () => {
+        try {
+          const api = requireAPI();
+          const fen = getFen();
+          const d = getDepth(perftDepthEl);
+          const t0 = (performance && performance.now) ? performance.now() : Date.now();
+          const nodes = api.perftFromFEN(fen, d);
+          const t1 = (performance && performance.now) ? performance.now() : Date.now();
+          appendLine(`PERFT depth ${d}: nodes=${nodes} (${Math.round(t1 - t0)}ms)`);
+        } catch (e) {
+          console.error(e);
+        }
+      });
+
+      // Run automatically once on load.
+      clearOut();
+      appendLine('Open DevTools Console for detailed objects. Running core engine tests…');
+      try {
+        if (typeof runCoreEngineTests === 'function') runCoreEngineTests();
+        else console.error('runCoreEngineTests not found');
+      } catch (e) {
+        console.error('CORE ENGINE TESTS: FAIL', e);
+      }
+      try {
+        if (typeof runTacticalTests === 'function') runTacticalTests();
+        else console.error('runTacticalTests not found');
+      } catch (e) {
+        console.error('TACTICAL TESTS: FAIL', e);
+      }
+    })();
   </script>
 </body>
 </html>
